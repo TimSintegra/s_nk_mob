@@ -1,0 +1,40 @@
+services:
+  web:
+    build: .
+    container_name: s_nk_mob_web
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    depends_on:
+      - db
+    volumes:
+      - static_volume:/app/staticfiles
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.s-nk-mob.rule=Host(`mob.s-nk.su`)"
+      - "traefik.http.routers.s-nk-mob.entrypoints=websecure"
+      - "traefik.http.routers.s-nk-mob.tls=true"
+      - "traefik.http.routers.s-nk-mob.tls.certresolver=letsencrypt"
+      - "traefik.http.services.s-nk-mob.loadbalancer.server.port=8000"
+    networks:
+      - default
+      - proxy
+
+  db:
+    image: postgres:16
+    container_name: s_nk_mob_db
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - default
+
+volumes:
+  postgres_data:
+  static_volume:
+
+networks:
+  proxy:
+    external: true

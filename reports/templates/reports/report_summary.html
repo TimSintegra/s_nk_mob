@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h4 class="mb-3">Итог отчёта</h4>
+
+<p><strong>Дата:</strong> {{ report.date }}</p>
+<p><strong>Бригада:</strong> {{ report.brigade }}</p>
+
+<h5 class="mt-4">Работы</h5>
+
+{% for work in report.work_items.all %}
+<div class="card mb-3">
+    <div class="card-body">
+        <h6>{{ work.site_name }}</h6>
+        <p class="mb-1"><strong>Работа:</strong> {{ work.work_node.code }} — {{ work.work_node.name }}</p>
+        <p class="mb-1"><strong>Объём:</strong> {{ work.quantity }} {{ work.work_node.unit }}</p>
+        <p class="mb-1"><strong>Титул:</strong> {{ work.title|default:"—" }}</p>
+        <p class="mb-0"><strong>Раздел:</strong> {{ work.project_section|default:"—" }}</p>
+    </div>
+</div>
+{% endfor %}
+
+<form method="post">
+    {% csrf_token %}
+
+    <h5 class="mt-4 mb-3">Рабочие</h5>
+
+    {% for worker in workers %}
+    <div class="border rounded p-2 mb-2">
+        <strong>{{ worker.full_name }}</strong>
+        <div class="row g-2 mt-1">
+            <div class="col-7">
+                <select name="worker_{{ worker.id }}_status" class="form-select">
+                    <option value="">Не отмечать</option>
+                    {% for value, label in worker_statuses %}
+                        <option value="{{ value }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-5">
+                <input name="worker_{{ worker.id }}_hours" type="number" step="0.5" class="form-control" placeholder="Часы">
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+
+    <div id="temporary-workers"></div>
+
+    <button type="button" class="btn btn-outline-primary w-100 mb-3" onclick="addTemporaryWorker()">
+        + Добавить рабочего
+    </button>
+
+    <button class="app-button w-100 mb-2">
+        Сохранить отчёт
+    </button>
+</form>
+
+<a href="{% url 'work_node_list' %}" class="btn btn-outline-primary w-100">
+    Добавить ещё работу
+</a>
+
+<script>
+function addTemporaryWorker() {
+    const container = document.getElementById("temporary-workers");
+
+    const block = document.createElement("div");
+    block.className = "border rounded p-2 mb-2";
+
+    block.innerHTML = `
+        <input name="temporary_worker_name" class="form-control mb-2" placeholder="ФИО рабочего">
+        <div class="row g-2">
+            <div class="col-7">
+                <select name="temporary_worker_status" class="form-select">
+                    <option value="">Статус</option>
+                    {% for value, label in worker_statuses %}
+                        <option value="{{ value }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-5">
+                <input name="temporary_worker_hours" type="number" step="0.5" class="form-control" placeholder="Часы">
+            </div>
+        </div>
+    `;
+
+    container.appendChild(block);
+}
+</script>
+{% endblock %}

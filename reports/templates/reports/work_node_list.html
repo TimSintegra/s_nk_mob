@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex gap-4 align-items-center mb-4">
+    {% if parent and parent.parent %}
+        <a href="{% url 'work_node_children' parent.parent.id %}" class="text-decoration-none">‹ Назад</a>
+    {% elif parent %}
+        <a href="{% url 'work_node_list' %}" class="text-decoration-none">‹ Назад</a>
+    {% else %}
+        <a href="{% url 'dashboard' %}" class="text-decoration-none">‹ Назад</a>
+    {% endif %}
+
+    <h5 class="mb-0">
+        {% if parent %}
+            {{ parent.code }}
+        {% else %}
+            Выберите работу
+        {% endif %}
+    </h5>
+</div>
+
+{% if parent %}
+<p class="mb-3">{{ parent.name }}</p>
+{% endif %}
+
+{% for node in nodes %}
+    {% if node.children.exists %}
+        <a href="{% url 'work_node_children' node.id %}" class="app-card mb-3">
+            <h5>{{ node.code }}</h5>
+            <small>{{ node.name }}</small>
+        </a>
+    {% else %}
+        <a href="{% url 'add_work_item' node.id %}" class="app-card mb-3">
+            <h5>{{ node.code }}</h5>
+            <small>{{ node.name }}</small>
+        </a>
+    {% endif %}
+{% empty %}
+<p>Работы ещё не добавлены.</p>
+{% endfor %}
+{% endblock %}

@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex gap-4 align-items-center mb-4">
+    {% if work_node.parent %}
+        <a href="{% url 'work_node_children' work_node.parent.id %}" class="text-decoration-none">‹ Назад</a>
+    {% else %}
+        <a href="{% url 'work_node_list' %}" class="text-decoration-none">‹ Назад</a>
+    {% endif %}
+    <h5 class="mb-0">{{ work_node.code }}</h5>
+</div>
+
+<p class="mb-4">{{ work_node.name }}</p>
+
+<form method="post">
+    {% csrf_token %}
+
+    <input type="hidden" name="date" value="{{ today|date:'Y-m-d' }}">
+
+    <div class="mb-3">
+        <label class="form-label">Объект</label>
+        <input name="site_name" class="form-control app-input" required>
+    </div>
+
+    <div class="mb-3">
+        <label class="form-label">Введите количество выполненного объёма</label>
+        <div class="d-flex align-items-center gap-2">
+            <input name="quantity" type="number" step="0.01" class="form-control app-input" required>
+            <small>{{ work_node.unit|default:"" }}</small>
+        </div>
+    </div>
+
+    <div class="mb-3">
+        <label class="form-label">Титул</label>
+        <input name="title" class="form-control app-input">
+    </div>
+
+    <div class="mb-3">
+        <label class="form-label">Раздел проекта</label>
+        <input name="project_section" class="form-control app-input">
+    </div>
+
+    <div class="mb-3">
+        <label class="form-label">Комментарий</label>
+        <textarea name="comment" class="form-control app-input"></textarea>
+    </div>
+
+    <div class="d-flex gap-3">
+        <button name="action" value="finish" class="app-button flex-fill">
+            Завершить отчёт
+        </button>
+        <button name="action" value="new" class="app-button flex-fill">
+            Новый вид работ
+        </button>
+    </div>
+</form>
+{% endblock %}

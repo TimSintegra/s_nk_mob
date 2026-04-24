@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex align-items-center gap-2 mb-4">
+    <div class="app-card flex-grow-1">
+        <strong>{{ master.full_name }}</strong><br>
+    </div>
+
+    <a href="{% url 'master_logout' %}" class="app-button">⎋</a>
+</div>
+
+<a href="{% url 'work_node_list' %}" class="app-card text-center mb-3">
+    <h4>＋ Выполнить работу</h4>
+</a>
+
+<a href="{% url 'report_calendar' %}" class="app-button w-100 text-center">
+    Отчёты по датам
+</a>
+{% endblock %}

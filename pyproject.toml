@@ -1,0 +1,18 @@
+[project]
+name = "s-nk-mob"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "django>=6.0.4",
+    "gunicorn>=25.3.0",
+    "openpyxl>=3.1.5",
+    "psycopg[binary]>=3.3.3",
+    "python-dotenv>=1.2.2",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.11",
+]
