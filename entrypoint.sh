@@ -2,7 +2,7 @@
 
 set -e
 
-uv run python manage.py migrate
-uv run python manage.py collectstatic --noinput
+.venv/bin/python manage.py migrate
+.venv/bin/python manage.py collectstatic --noinput
 
-uv run gunicorn config.wsgi:application --bind 0.0.0.0:8000
+exec .venv/bin/gunicorn config.wsgi:application --bind 0.0.0.0:8000
