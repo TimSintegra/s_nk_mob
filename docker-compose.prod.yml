@@ -14,9 +14,9 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.s-nk-mob.rule=Host(`${APP_DOMAIN:-mob.s-nk.su}`)"
-      - "traefik.http.routers.s-nk-mob.entrypoints=websecure"
+      - "traefik.http.routers.s-nk-mob.entrypoints=https"
       - "traefik.http.routers.s-nk-mob.tls=true"
-      - "traefik.http.routers.s-nk-mob.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.s-nk-mob.tls.certresolver=letsEncrypt"
       - "traefik.http.services.s-nk-mob.loadbalancer.server.port=8000"
     networks:
       - default
