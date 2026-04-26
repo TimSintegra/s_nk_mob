@@ -7,11 +7,13 @@ services:
       - .env.production
     depends_on:
       - db
+    ports:
+      - "${APP_PORT:-9000}:8000"
     volumes:
       - static_volume:/app/staticfiles
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.s-nk-mob.rule=Host(`mob.s-nk.su`)"
+      - "traefik.http.routers.s-nk-mob.rule=Host(`${APP_DOMAIN:-mob.s-nk.su}`)"
       - "traefik.http.routers.s-nk-mob.entrypoints=websecure"
       - "traefik.http.routers.s-nk-mob.tls=true"
       - "traefik.http.routers.s-nk-mob.tls.certresolver=letsencrypt"
@@ -38,3 +40,4 @@ volumes:
 networks:
   proxy:
     external: true
+    name: ${TRAEFIK_NETWORK:-docker_proxy-server-net}
