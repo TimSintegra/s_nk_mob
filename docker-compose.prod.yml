@@ -13,6 +13,7 @@ services:
       - static_volume:/app/staticfiles
     labels:
       - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK:-docker_proxy-server-net}"
       - "traefik.http.routers.s-nk-mob.rule=Host(`${APP_DOMAIN:-mob.s-nk.su}`)"
       - "traefik.http.routers.s-nk-mob.entrypoints=https"
       - "traefik.http.routers.s-nk-mob.tls=true"
