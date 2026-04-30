@@ -72,17 +72,25 @@ class ReportWorkItem(models.Model):
 
 
 class ReportWorkerEntry(models.Model):
-    STATUS_PRESENT = "present"
-    STATUS_ABSENT = "absent"
     STATUS_SICK = "sick"
+    STATUS_ADMIN = "admin"
     STATUS_VACATION = "vacation"
+    STATUS_STUDY = "study"
 
     STATUS_CHOICES = [
-        (STATUS_PRESENT, "Работал"),
-        (STATUS_ABSENT, "Не пришёл"),
-        (STATUS_SICK, "Болеет"),
+        (STATUS_SICK, "Больничный"),
+        (STATUS_ADMIN, "Административный"),
         (STATUS_VACATION, "Отпуск"),
+        (STATUS_STUDY, "Ученический"),
     ]
+
+    STATUS_SHORT_LABELS = {
+        "absent": "А",
+        STATUS_SICK: "Б",
+        STATUS_ADMIN: "А",
+        STATUS_VACATION: "От",
+        STATUS_STUDY: "Уч",
+    }
 
     report = models.ForeignKey(
         DailyReport,
@@ -99,7 +107,7 @@ class ReportWorkerEntry(models.Model):
         blank=True,
     )
     temporary_worker_name = models.CharField("Добавленный рабочий", max_length=255, blank=True)
-    status = models.CharField("Статус", max_length=20, choices=STATUS_CHOICES)
+    status = models.CharField("Статус", max_length=20, choices=STATUS_CHOICES, blank=True)
     hours = models.DecimalField("Часы", max_digits=5, decimal_places=2, default=0)
 
     class Meta:
@@ -110,3 +118,17 @@ class ReportWorkerEntry(models.Model):
         if self.worker:
             return self.worker.full_name
         return self.temporary_worker_name
+
+    @property
+    def timesheet_value(self):
+        if self.status == "present" and self.hours:
+            if self.hours == self.hours.to_integral():
+                return str(int(self.hours))
+            return format(self.hours.normalize(), "f")
+        if self.status:
+            return self.STATUS_SHORT_LABELS.get(self.status, self.get_status_display())
+        if self.hours:
+            if self.hours == self.hours.to_integral():
+                return str(int(self.hours))
+            return format(self.hours.normalize(), "f")
+        return ""

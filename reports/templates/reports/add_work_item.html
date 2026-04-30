@@ -15,7 +15,10 @@
 <form method="post">
     {% csrf_token %}
 
-    <input type="hidden" name="date" value="{{ today|date:'Y-m-d' }}">
+    <div class="mb-3">
+        <label class="form-label">Дата</label>
+        <input name="date" type="date" value="{{ today|date:'Y-m-d' }}" class="form-control app-input" required>
+    </div>
 
     <div class="mb-3">
         <label class="form-label">Объект</label>

@@ -1,3 +1,4 @@
+from calendar import monthrange
 from datetime import date
 from decimal import Decimal
 
@@ -9,6 +10,21 @@ from openpyxl import Workbook
 from accounts.models import Master
 from core.models import WorkNode, Worker
 from reports.models import DailyReport, ReportWorkItem, ReportWorkerEntry
+
+
+def parse_decimal(value):
+    if not value:
+        return Decimal("0")
+    return Decimal(value.replace(",", "."))
+
+
+def short_full_name(full_name):
+    parts = full_name.split()
+    if len(parts) < 2:
+        return full_name
+
+    initials = [f"{part[0]}." for part in parts[1:] if part]
+    return " ".join([parts[0], *initials])
 
 
 def get_current_master(request):
@@ -164,14 +180,14 @@ def report_summary(request, report_id):
 
         for worker in workers:
             status = request.POST.get(f"worker_{worker.id}_status")
-            hours = request.POST.get(f"worker_{worker.id}_hours") or "0"
+            hours = parse_decimal(request.POST.get(f"worker_{worker.id}_hours"))
 
-            if status:
+            if status or hours:
                 ReportWorkerEntry.objects.create(
                     report=report,
                     worker=worker,
                     status=status,
-                    hours=Decimal(hours),
+                    hours=Decimal("0") if status else hours,
                 )
 
         temporary_names = request.POST.getlist("temporary_worker_name")
@@ -180,13 +196,14 @@ def report_summary(request, report_id):
 
         for name, status, hours in zip(temporary_names, temporary_statuses, temporary_hours, strict=False):
             name = name.strip()
+            hours = parse_decimal(hours)
 
-            if name and status:
+            if name and (status or hours):
                 ReportWorkerEntry.objects.create(
                     report=report,
                     temporary_worker_name=name,
                     status=status,
-                    hours=Decimal(hours or "0"),
+                    hours=Decimal("0") if status else hours,
                 )
 
         report.status = DailyReport.STATUS_DONE
@@ -202,6 +219,106 @@ def report_summary(request, report_id):
             "report": report,
             "workers": workers,
             "worker_statuses": ReportWorkerEntry.STATUS_CHOICES,
+        },
+    )
+
+
+@master_login_required
+def timesheet(request):
+    master = request.master
+    today = date.today()
+    selected_month = request.GET.get("month") or today.strftime("%Y-%m")
+
+    try:
+        year, month = [int(part) for part in selected_month.split("-", 1)]
+        days_count = monthrange(year, month)[1]
+    except (TypeError, ValueError):
+        year = today.year
+        month = today.month
+        selected_month = today.strftime("%Y-%m")
+        days_count = monthrange(year, month)[1]
+
+    month_start = date(year, month, 1)
+    month_end = date(year, month, days_count)
+    days = list(range(1, days_count + 1))
+
+    main_rows = {}
+    extra_rows = {}
+    assigned_workers = Worker.objects.filter(
+        brigade=master.brigade,
+        is_active=True,
+    ).order_by("full_name")
+
+    for worker in assigned_workers:
+        main_rows[("worker", worker.id)] = {
+            "name": worker.full_name,
+            "short_name": short_full_name(worker.full_name),
+            "cells": [""] * days_count,
+            "sort_name": worker.full_name.lower(),
+        }
+
+    entries = ReportWorkerEntry.objects.filter(
+        report__master=master,
+        report__date__gte=month_start,
+        report__date__lte=month_end,
+    ).select_related("report", "worker")
+
+    for entry in entries:
+        rows = main_rows
+
+        if entry.worker and entry.worker.brigade_id == master.brigade_id:
+            key = ("worker", entry.worker_id)
+            if key not in rows:
+                rows[key] = {
+                    "name": entry.worker.full_name,
+                    "short_name": short_full_name(entry.worker.full_name),
+                    "cells": [""] * days_count,
+                    "sort_name": entry.worker.full_name.lower(),
+                }
+        elif entry.worker:
+            rows = extra_rows
+            key = ("worker", entry.worker_id)
+            if key not in rows:
+                rows[key] = {
+                    "name": entry.worker.full_name,
+                    "short_name": short_full_name(entry.worker.full_name),
+                    "cells": [""] * days_count,
+                    "sort_name": entry.worker.full_name.lower(),
+                }
+        else:
+            rows = extra_rows
+            name = entry.temporary_worker_name.strip()
+            if not name:
+                continue
+            key = ("temporary", name.lower())
+            if key not in rows:
+                rows[key] = {
+                    "name": name,
+                    "short_name": short_full_name(name),
+                    "cells": [""] * days_count,
+                    "sort_name": name.lower(),
+                }
+
+        value = entry.timesheet_value
+        if not value:
+            continue
+
+        day_index = entry.report.date.day - 1
+        current_value = rows[key]["cells"][day_index]
+        rows[key]["cells"][day_index] = (
+            f"{current_value}, {value}" if current_value and value not in current_value.split(", ") else value
+        )
+
+    return render(
+        request,
+        "reports/timesheet.html",
+        {
+            "days": days,
+            "extra_rows": sorted(extra_rows.values(), key=lambda item: item["sort_name"]),
+            "master": master,
+            "month_title": month_start.strftime("%m.%Y"),
+            "rows": sorted(main_rows.values(), key=lambda item: item["sort_name"]),
+            "selected_month": selected_month,
         },
     )
 

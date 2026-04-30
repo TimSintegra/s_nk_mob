@@ -30,15 +30,15 @@
         <strong>{{ worker.full_name }}</strong>
         <div class="row g-2 mt-1">
             <div class="col-7">
-                <select name="worker_{{ worker.id }}_status" class="form-select">
-                    <option value="">Не отмечать</option>
+                <select name="worker_{{ worker.id }}_status" class="form-select worker-status">
+                    <option value="">Время</option>
                     {% for value, label in worker_statuses %}
                         <option value="{{ value }}">{{ label }}</option>
                     {% endfor %}
                 </select>
             </div>
             <div class="col-5">
-                <input name="worker_{{ worker.id }}_hours" type="number" step="0.5" class="form-control" placeholder="Часы">
+                <input name="worker_{{ worker.id }}_hours" type="number" step="0.5" class="form-control worker-hours" placeholder="Время">
             </div>
         </div>
     </div>
@@ -70,20 +70,40 @@ function addTemporaryWorker() {
         <input name="temporary_worker_name" class="form-control mb-2" placeholder="ФИО рабочего">
         <div class="row g-2">
             <div class="col-7">
-                <select name="temporary_worker_status" class="form-select">
-                    <option value="">Статус</option>
+                <select name="temporary_worker_status" class="form-select worker-status">
+                    <option value="">Время</option>
                     {% for value, label in worker_statuses %}
                         <option value="{{ value }}">{{ label }}</option>
                     {% endfor %}
                 </select>
             </div>
             <div class="col-5">
-                <input name="temporary_worker_hours" type="number" step="0.5" class="form-control" placeholder="Часы">
+                <input name="temporary_worker_hours" type="number" step="0.5" class="form-control worker-hours" placeholder="Время">
             </div>
         </div>
     `;
 
     container.appendChild(block);
+    bindWorkerStatusSelect(block.querySelector(".worker-status"));
 }
+
+function bindWorkerStatusSelect(select) {
+    const row = select.closest(".row");
+    const hoursInput = row.querySelector(".worker-hours");
+
+    function syncHoursState() {
+        if (select.value) {
+            hoursInput.value = "";
+            hoursInput.disabled = true;
+        } else {
+            hoursInput.disabled = false;
+        }
+    }
+
+    select.addEventListener("change", syncHoursState);
+    syncHoursState();
+}
+
+document.querySelectorAll(".worker-status").forEach(bindWorkerStatusSelect);
 </script>
 {% endblock %}
