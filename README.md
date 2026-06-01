@@ -84,7 +84,7 @@ docker compose -f docker-compose.prod.yml exec web uv run python manage.py creat
 Импортировать дерево работ из Excel:
 
 ```bash
-docker compose -f docker-compose.prod.yml exec web uv run python manage.py import_work_tree data/ЕР.xlsx --clear
+docker compose -f docker-compose.prod.yml exec web uv run python manage.py import_work_tree "data/Структура ЕР.xlsx" --clear
 ```
 
 После этого админка будет доступна по `/admin/`.

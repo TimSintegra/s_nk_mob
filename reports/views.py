@@ -95,9 +95,9 @@ def work_node_list(request, parent_id=None):
 
     if parent_id:
         parent = get_object_or_404(WorkNode, id=parent_id, is_active=True)
-        nodes = parent.children.filter(is_active=True).order_by("code")
+        nodes = parent.children.filter(is_active=True).order_by("id")
     else:
-        nodes = WorkNode.objects.filter(parent__isnull=True, is_active=True).order_by("code")
+        nodes = WorkNode.objects.filter(parent__isnull=True, is_active=True).order_by("id")
 
     return render(
         request,
@@ -114,7 +114,7 @@ def add_work_item(request, work_node_id):
     master = request.master
     work_node = get_object_or_404(WorkNode, id=work_node_id, is_active=True)
 
-    if work_node.children.exists():
+    if work_node.has_active_children:
         return redirect("work_node_children", parent_id=work_node.id)
 
     if request.method == "POST":

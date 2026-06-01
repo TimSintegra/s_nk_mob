@@ -12,7 +12,13 @@
 
     <h5 class="mb-0">
         {% if parent %}
-            {{ parent.code }}
+            {% if parent.code == "II00" %}
+                {{ parent.name }}
+            {% elif parent.code %}
+                {{ parent.code }}
+            {% else %}
+                {{ parent.name }}
+            {% endif %}
         {% else %}
             Выберите работу
         {% endif %}
@@ -24,15 +30,25 @@
 {% endif %}
 
 {% for node in nodes %}
-    {% if node.children.exists %}
+    {% if node.has_active_children %}
         <a href="{% url 'work_node_children' node.id %}" class="app-card mb-3">
-            <h5>{{ node.code }}</h5>
-            <small>{{ node.name }}</small>
+            {% if node.code == "II00" %}
+                <h5 class="mb-0">{{ node.name }}</h5>
+            {% elif node.code %}
+                <h5>{{ node.code }}</h5>
+                <small>{{ node.name }}</small>
+            {% else %}
+                <h5 class="mb-0">{{ node.name }}</h5>
+            {% endif %}
         </a>
     {% else %}
         <a href="{% url 'add_work_item' node.id %}" class="app-card mb-3">
-            <h5>{{ node.code }}</h5>
-            <small>{{ node.name }}</small>
+            {% if node.code %}
+                <h5>{{ node.code }}</h5>
+                <small>{{ node.name }}</small>
+            {% else %}
+                <h5 class="mb-0">{{ node.name }}</h5>
+            {% endif %}
         </a>
     {% endif %}
 {% empty %}

@@ -106,6 +106,66 @@ docker restart proxy-server
 docker logs --tail=120 proxy-server | grep s-nk-mob
 ```
 
+## Если домен отвечает 404, а Traefik работает
+
+Если `https://mob.s-nk.su/` отвечает `404`, но в логах `proxy-server` нет ошибок Docker provider, проверь состояние контейнеров проекта:
+
+```bash
+docker ps -a --filter name=s_nk_mob
+docker-compose -f docker-compose.prod.yml ps
+docker logs --tail=120 s_nk_mob_web
+docker logs --tail=80 s_nk_mob_db
+```
+
+Если `web` пишет `failed to resolve host 'db'`, а `docker-compose up -d` падает с ошибкой вида:
+
+```text
+network ... not found
+```
+
+значит у проекта пропала внутренняя сеть `s-nk-mob_default`, а старые контейнеры остались привязаны к несуществующему network ID. В этом случае не трогай volume с базой и не выполняй:
+
+```bash
+docker-compose -f docker-compose.prod.yml down -v
+```
+
+Безопасный порядок восстановления:
+
+```bash
+docker ps -a --filter name=s_nk_mob
+docker rm -f s_nk_mob_web
+docker rm -f s_nk_mob_db
+docker network ls | grep s-nk-mob
+docker network rm s-nk-mob_default
+docker-compose -f docker-compose.prod.yml up -d db
+docker-compose -f docker-compose.prod.yml up -d --no-deps web
+docker-compose -f docker-compose.prod.yml ps
+```
+
+Если `docker network rm s-nk-mob_default` ответит, что сети нет, это нормально. После пересоздания контейнеров Compose создаст сеть заново.
+
+Проверка после восстановления:
+
+```bash
+docker logs --tail=80 s_nk_mob_db
+docker logs --tail=120 s_nk_mob_web
+curl -I http://127.0.0.1:9000/login/
+curl -vkI https://mob.s-nk.su/login/
+```
+
+Нормальный результат:
+
+```text
+HTTP/1.1 301 Moved Permanently
+Location: https://127.0.0.1:9000/login/
+```
+
+и снаружи:
+
+```text
+HTTP/2 200
+```
+
 ## Полезные команды
 
 ```bash

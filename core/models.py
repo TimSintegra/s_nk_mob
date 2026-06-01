@@ -33,7 +33,8 @@ class Worker(models.Model):
 
 
 class WorkNode(models.Model):
-    code = models.CharField("Код", max_length=100, unique=True)
+    code = models.CharField("Код", max_length=100)
+    source_key = models.CharField("Ключ импорта", max_length=255, unique=True, null=True, blank=True)
     name = models.CharField("Название", max_length=700)
     parent = models.ForeignKey(
         "self",
@@ -49,11 +50,15 @@ class WorkNode(models.Model):
     class Meta:
         verbose_name = "Работа"
         verbose_name_plural = "Дерево работ"
-        ordering = ["code"]
+        ordering = ["id"]
 
     def __str__(self):
-        return f"{self.code} — {self.name}"
+        return f"{self.code} - {self.name}"
 
     @property
     def is_leaf(self):
-        return not self.children.exists()
+        return not self.children.filter(is_active=True).exists()
+
+    @property
+    def has_active_children(self):
+        return self.children.filter(is_active=True).exists()

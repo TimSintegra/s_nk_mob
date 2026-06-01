@@ -17,6 +17,6 @@ class WorkerAdmin(admin.ModelAdmin):
 
 @admin.register(WorkNode)
 class WorkNodeAdmin(admin.ModelAdmin):
-    list_display = ["code", "name", "parent", "unit", "is_active"]
+    list_display = ["code", "source_key", "name", "parent", "unit", "is_active"]
     list_filter = ["is_active", "parent"]
-    search_fields = ["code", "name"]
+    search_fields = ["code", "source_key", "name"]
