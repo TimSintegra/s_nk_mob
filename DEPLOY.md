@@ -1,172 +1,130 @@
 # Деплой s-nk-mob
 
-Памятка для обновления приложения на сервере.
+Короткая памятка, как обновлять проект на сервере.
 
-## Обычный деплой
+## Что должно быть на сервере
+
+- установлен Docker
+- установлен `docker-compose` 1.29.2 или новый `docker compose`
+- доступ к репозиторию GitHub
+- файл `.env.production` рядом с `docker-compose.prod.yml`
+
+## Важное про `git pull`
+
+GitHub больше не принимает пароль аккаунта для HTTPS-операций.
+
+Когда `git pull` спросит:
+
+- `Username` - вводишь свой GitHub username
+- `Password` - вставляешь Personal Access Token, а не обычный пароль
+
+Токен у тебя уже сохранён в избранных в Telegram, так что просто вставляешь его вместо пароля.
+
+## Первый деплой на сервере
+
+Если проект ещё не развернут:
+
+```bash
+cd /var/www
+git clone https://github.com/TimSintegra/s_nk_mob.git
+cd s_nk_mob
+cp .env.production.example .env.production
+nano .env.production
+docker-compose -f docker-compose.prod.yml up -d --build
+```
+
+Проверка:
+
+```bash
+docker-compose -f docker-compose.prod.yml ps
+docker-compose -f docker-compose.prod.yml logs --tail=120 web
+```
+
+## Обычное обновление
+
+Если проект уже развернут и нужно просто обновить код:
 
 ```bash
 cd /path/to/s-nk-mob
 git pull
-git log --oneline -1
-docker-compose -f docker-compose.prod.yml up -d --build
-docker-compose -f docker-compose.prod.yml ps
-```
-
-Если на сервере установлен новый compose-плагин, можно использовать:
-
-```bash
-docker compose -f docker-compose.prod.yml up -d --build
-```
-
-На текущем сервере используется старый `docker-compose 1.29.2`, поэтому рабочая команда:
-
-```bash
-docker-compose -f docker-compose.prod.yml up -d --build
-```
-
-## Если появилась ошибка ContainerConfig
-
-Старый `docker-compose 1.29.2` иногда падает с ошибкой:
-
-```text
-KeyError: 'ContainerConfig'
-```
-
-В этом случае не удаляй volume с базой. Нельзя выполнять:
-
-```bash
-docker-compose -f docker-compose.prod.yml down -v
-```
-
-Безопасный порядок:
-
-```bash
-docker ps -a --filter name=s_nk_mob
-docker rm -f ИМЯ_ИЛИ_ID_СТАРОГО_WEB_КОНТЕЙНЕРА
-docker rm -f ИМЯ_ИЛИ_ID_СТАРОГО_DB_КОНТЕЙНЕРА
+docker-compose -f docker-compose.prod.yml build web
+docker rm -f s_nk_mob_web
 docker-compose -f docker-compose.prod.yml up -d db
 docker-compose -f docker-compose.prod.yml up -d --no-deps web
+docker-compose -f docker-compose.prod.yml exec web uv run python manage.py import_work_tree "data/Структура ЕР.xlsx" --clear
 docker-compose -f docker-compose.prod.yml ps
 ```
 
-Если контейнеры были переименованы compose-ом, их имена могут выглядеть так:
+## Если `git pull` не проходит
 
-```text
-f9df80971b91_s_nk_mob_web
-66f5a6b5247f_s_nk_mob_db
-```
-
-Удалять такие контейнеры можно. Данные Postgres хранятся в named volume `postgres_data`, его не трогаем.
-
-## Проверка приложения
+Иногда на сервере могут остаться локальные правки. Тогда сначала сохрани их:
 
 ```bash
-docker-compose -f docker-compose.prod.yml logs --tail=120 web
-curl -I http://127.0.0.1:9000/login/
+git status
+git stash push -m "server local changes"
+git pull
 ```
 
-Если приложение работает напрямую, `curl` вернет ответ от `gunicorn`. При включенном HTTPS-редиректе может быть:
-
-```text
-HTTP/1.1 301 Moved Permanently
-Location: https://127.0.0.1:9000/login/
-```
-
-Это нормально для прямой проверки HTTP-порта.
-
-## Проверка Traefik
-
-Если сайт через домен показывает `Gateway Timeout`, проверь, куда Traefik направляет трафик:
+Если нужно вернуть спрятанные изменения:
 
 ```bash
-docker logs --tail=120 proxy-server | grep s-nk-mob
-docker inspect s_nk_mob_web --format '{{json .NetworkSettings.Networks}}'
-docker inspect proxy-server --format '{{json .NetworkSettings.Networks}}'
+git stash pop
 ```
 
-В логах Traefik для `s-nk-mob` должен быть адрес из сети `docker_proxy-server-net`, например:
+## Если при запуске `web` появляется `ContainerConfig`
 
-```text
-Creating server 0 http://172.19.0.2:8000
-```
-
-Если Traefik выбрал адрес из другой сети, например `192.168.0.3:8000`, проверь label в `docker-compose.prod.yml`:
-
-```yaml
-- "traefik.docker.network=${TRAEFIK_NETWORK:-docker_proxy-server-net}"
-```
-
-После исправления пересоздай web-контейнер:
-
-```bash
-docker ps -a --filter name=s_nk_mob_web
-docker rm -f ИМЯ_ИЛИ_ID_WEB_КОНТЕЙНЕРА
-docker-compose -f docker-compose.prod.yml up -d --no-deps web
-docker restart proxy-server
-docker logs --tail=120 proxy-server | grep s-nk-mob
-```
-
-## Если домен отвечает 404, а Traefik работает
-
-Если `https://mob.s-nk.su/` отвечает `404`, но в логах `proxy-server` нет ошибок Docker provider, проверь состояние контейнеров проекта:
-
-```bash
-docker ps -a --filter name=s_nk_mob
-docker-compose -f docker-compose.prod.yml ps
-docker logs --tail=120 s_nk_mob_web
-docker logs --tail=80 s_nk_mob_db
-```
-
-Если `web` пишет `failed to resolve host 'db'`, а `docker-compose up -d` падает с ошибкой вида:
-
-```text
-network ... not found
-```
-
-значит у проекта пропала внутренняя сеть `s-nk-mob_default`, а старые контейнеры остались привязаны к несуществующему network ID. В этом случае не трогай volume с базой и не выполняй:
-
-```bash
-docker-compose -f docker-compose.prod.yml down -v
-```
-
-Безопасный порядок восстановления:
+Это баг старого `docker-compose 1.29.2`. В этом случае не трогай volume с PostgreSQL и сделай так:
 
 ```bash
 docker ps -a --filter name=s_nk_mob
 docker rm -f s_nk_mob_web
-docker rm -f s_nk_mob_db
-docker network ls | grep s-nk-mob
-docker network rm s-nk-mob_default
 docker-compose -f docker-compose.prod.yml up -d db
 docker-compose -f docker-compose.prod.yml up -d --no-deps web
-docker-compose -f docker-compose.prod.yml ps
 ```
 
-Если `docker network rm s-nk-mob_default` ответит, что сети нет, это нормально. После пересоздания контейнеров Compose создаст сеть заново.
-
-Проверка после восстановления:
+Если контейнер был пересоздан, после этого снова запускай импорт:
 
 ```bash
-docker logs --tail=80 s_nk_mob_db
-docker logs --tail=120 s_nk_mob_web
+docker-compose -f docker-compose.prod.yml exec web uv run python manage.py import_work_tree "data/Структура ЕР.xlsx" --clear
+```
+
+## Если Excel не виден внутри контейнера
+
+Проверь, что файл реально попал в образ:
+
+```bash
+docker-compose -f docker-compose.prod.yml exec web sh -lc 'ls -la /app/data'
+```
+
+Если папки или файла нет, значит образ надо пересобрать:
+
+```bash
+docker-compose -f docker-compose.prod.yml build web
+docker rm -f s_nk_mob_web
+docker-compose -f docker-compose.prod.yml up -d --no-deps web
+```
+
+## Проверка после деплоя
+
+```bash
+docker-compose -f docker-compose.prod.yml ps
+docker-compose -f docker-compose.prod.yml logs --tail=120 web
 curl -I http://127.0.0.1:9000/login/
+```
+
+Если сайт работает через домен, можно ещё проверить:
+
+```bash
 curl -vkI https://mob.s-nk.su/login/
 ```
 
-Нормальный результат:
+## Что нельзя делать
 
-```text
-HTTP/1.1 301 Moved Permanently
-Location: https://127.0.0.1:9000/login/
-```
+- не выполняй `docker-compose down -v`
+- не удаляй volume `postgres_data`
+- не вводи обычный пароль GitHub вместо token
 
-и снаружи:
-
-```text
-HTTP/2 200
-```
-
-## Полезные команды
+## Частые полезные команды
 
 ```bash
 docker-compose -f docker-compose.prod.yml ps
@@ -175,38 +133,3 @@ docker-compose -f docker-compose.prod.yml restart web
 docker ps -a --filter name=s_nk_mob
 docker volume ls | grep postgres
 ```
-
-## Быстрый деплой после `git pull`
-
-Если ты уже на сервере и нужно просто обновить проект, делай так:
-
-```bash
-cd /path/to/s-nk-mob
-git pull
-docker-compose -f docker-compose.prod.yml up -d
-docker-compose -f docker-compose.prod.yml exec web uv run python manage.py import_work_tree "data/Структура ЕР.xlsx" --clear
-docker-compose -f docker-compose.prod.yml ps
-```
-
-Если `docker-compose -f docker-compose.prod.yml up -d --build` падает с `ContainerConfig`, это известная проблема `docker-compose 1.29.2`. Тогда используй обходной путь:
-
-```bash
-docker ps -a --filter name=s_nk_mob
-docker rm -f s_nk_mob_web
-docker-compose -f docker-compose.prod.yml up -d db
-docker-compose -f docker-compose.prod.yml up -d --no-deps web
-docker-compose -f docker-compose.prod.yml exec web uv run python manage.py import_work_tree "data/Структура ЕР.xlsx" --clear
-```
-
-Если нужно именно пересобрать образ, а не только перезапустить контейнер, можно сделать так:
-
-```bash
-docker-compose -f docker-compose.prod.yml build web
-docker-compose -f docker-compose.prod.yml up -d db
-docker-compose -f docker-compose.prod.yml up -d --no-deps web
-```
-
-Важно:
-- не делай `docker-compose down -v`, чтобы не удалить volume с PostgreSQL;
-- перед импортом можно сделать дамп базы;
-- `--clear` не удаляет записи физически, а скрывает устаревшие узлы.
