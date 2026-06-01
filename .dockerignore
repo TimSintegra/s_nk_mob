@@ -13,4 +13,3 @@ logs/
 .idea/
 .vscode/
 *.dump
-data/
