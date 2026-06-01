@@ -175,3 +175,38 @@ docker-compose -f docker-compose.prod.yml restart web
 docker ps -a --filter name=s_nk_mob
 docker volume ls | grep postgres
 ```
+
+## Быстрый деплой после `git pull`
+
+Если ты уже на сервере и нужно просто обновить проект, делай так:
+
+```bash
+cd /path/to/s-nk-mob
+git pull
+docker-compose -f docker-compose.prod.yml up -d
+docker-compose -f docker-compose.prod.yml exec web uv run python manage.py import_work_tree "data/Структура ЕР.xlsx" --clear
+docker-compose -f docker-compose.prod.yml ps
+```
+
+Если `docker-compose -f docker-compose.prod.yml up -d --build` падает с `ContainerConfig`, это известная проблема `docker-compose 1.29.2`. Тогда используй обходной путь:
+
+```bash
+docker ps -a --filter name=s_nk_mob
+docker rm -f s_nk_mob_web
+docker-compose -f docker-compose.prod.yml up -d db
+docker-compose -f docker-compose.prod.yml up -d --no-deps web
+docker-compose -f docker-compose.prod.yml exec web uv run python manage.py import_work_tree "data/Структура ЕР.xlsx" --clear
+```
+
+Если нужно именно пересобрать образ, а не только перезапустить контейнер, можно сделать так:
+
+```bash
+docker-compose -f docker-compose.prod.yml build web
+docker-compose -f docker-compose.prod.yml up -d db
+docker-compose -f docker-compose.prod.yml up -d --no-deps web
+```
+
+Важно:
+- не делай `docker-compose down -v`, чтобы не удалить volume с PostgreSQL;
+- перед импортом можно сделать дамп базы;
+- `--clear` не удаляет записи физически, а скрывает устаревшие узлы.

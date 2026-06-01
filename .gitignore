@@ -12,4 +12,3 @@ logs/*.log
 .idea/
 .vscode/
 *.dump
-data/
