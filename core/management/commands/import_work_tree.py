@@ -68,40 +68,6 @@ class BandState:
     label: WorkNode | None = None
 
 
-SECTION_CONFIGS = [
-    SectionConfig(
-        root_code="EL00",
-        root_name=None,
-        root_cell="A1",
-        blue_row=2,
-        blue_starts=[1, 19],
-        green_row=3,
-        green_starts=[1, 7, 13, 19, 25, 31],
-        end_row=65,
-    ),
-    SectionConfig(
-        root_code="II00",
-        root_name="Монтаж/подключение/расключение кабеля",
-        root_cell="A66",
-        blue_row=67,
-        blue_starts=[1, 19, 37],
-        green_row=68,
-        green_starts=[1, 7, 13, 19, 25, 31, 37, 42, 47],
-        end_row=166,
-    ),
-    SectionConfig(
-        root_code="CS00",
-        root_name=None,
-        root_cell="A168",
-        blue_row=169,
-        blue_starts=[1, 40],
-        green_row=170,
-        green_starts=[1, 9, 17, 22, 30, 35, 40, 48],
-        end_row=198,
-    ),
-]
-
-
 class Command(BaseCommand):
     help = "Import work tree from the structured Excel workbook"
 
@@ -118,10 +84,6 @@ class Command(BaseCommand):
         if not workbook.worksheets:
             raise CommandError("В книге нет листов.")
 
-        sheet = workbook.worksheets[0]
-        if len(workbook.worksheets) > 1:
-            self.stdout.write(self.style.WARNING(f"Используется только первый лист: {sheet.title}"))
-
         if options["clear"]:
             deactivated_count = WorkNode.objects.update(is_active=False)
         else:
@@ -132,11 +94,23 @@ class Command(BaseCommand):
         imported_keys = set()
 
         with transaction.atomic():
-            for section in SECTION_CONFIGS:
-                section_created, section_updated, section_keys = self.import_section(sheet, section)
-                created_count += section_created
-                updated_count += section_updated
-                imported_keys.update(section_keys)
+            for sheet in workbook.worksheets:
+                section = self.detect_section(sheet)
+                if section is None:
+                    self.stdout.write(self.style.WARNING(
+                        f"Пропущен лист '{sheet.title}': не удалось определить заголовок"
+                    ))
+                    continue
+
+                self.stdout.write(f"  Лист '{sheet.title}' → {section.root_code} "
+                                  f"(синих={len(section.blue_starts)} "
+                                  f"зелёных={len(section.green_starts)} "
+                                  f"строк={section.end_row})")
+
+                s_created, s_updated, s_keys = self.import_section(sheet, section)
+                created_count += s_created
+                updated_count += s_updated
+                imported_keys.update(s_keys)
 
         self.stdout.write(self.style.SUCCESS("Импорт завершён."))
         self.stdout.write(f"Создано: {created_count}")
@@ -144,6 +118,57 @@ class Command(BaseCommand):
         self.stdout.write(f"Уникальных узлов: {len(imported_keys)}")
         if options["clear"]:
             self.stdout.write(f"Скрыто устаревших узлов: {deactivated_count}")
+
+    def detect_section(self, sheet):
+        """Автоопределение структуры раздела из листа Excel.
+
+        Ожидаемая раскладка листа:
+          Строка 1 (розовая)  — корень раздела, напр. "EL00 ЭЛЕКТРОМОНТАЖНЫЕ РАБОТЫ"
+          Строка 2 (синяя)    — подразделы первого уровня
+          Строка 3 (зелёная)  — подразделы второго уровня
+          Строки 4+ (белые)   — конкретные работы
+        """
+        # --- корень: ячейка A1 ---
+        root_cell = sheet.cell(row=1, column=1)
+        root_text = str(root_cell.value).strip() if root_cell.value is not None else ""
+
+        if not root_text:
+            root_text = sheet.title.strip()
+        if not root_text:
+            return None
+
+        root_text = self.normalize_text(root_text)
+        extracted = self.extract_code_and_name(root_text)
+        root_code = extracted[0] if extracted else root_text
+
+        # --- синие колонки из строки 2 ---
+        blue_starts = sorted(set(
+            cell.column for cell in sheet[2]
+            if cell.value and isinstance(cell.value, str) and cell.value.strip()
+        ))
+
+        # --- зелёные колонки из строки 3 ---
+        green_starts = sorted(set(
+            cell.column for cell in sheet[3]
+            if cell.value and isinstance(cell.value, str) and cell.value.strip()
+        ))
+
+        # Если какой-то ряд пуст — подменяем умолчанием
+        if not blue_starts:
+            blue_starts = [1]
+        if not green_starts:
+            green_starts = blue_starts[:]  # если зелёных нет, используем синие
+
+        return SectionConfig(
+            root_code=root_code,
+            root_name=None,
+            root_cell="A1",
+            blue_row=2,
+            blue_starts=blue_starts,
+            green_row=3,
+            green_starts=green_starts,
+            end_row=sheet.max_row,
+        )
 
     def import_section(self, sheet, section):
         band_states = self.build_band_states(section)
@@ -320,8 +345,11 @@ class Command(BaseCommand):
     def green_starts_for_blue(self, section, blue_start):
         blue_starts = sorted(section.blue_starts)
         start_index = blue_starts.index(blue_start)
-        end = blue_starts[start_index + 1] - 1 if start_index + 1 < len(blue_starts) else 56
-        return [green_start for green_start in section.green_starts if blue_start <= green_start <= end]
+        if start_index + 1 < len(blue_starts):
+            end = blue_starts[start_index + 1] - 1
+        else:
+            end = max(section.green_starts, default=0) + 50
+        return [gs for gs in section.green_starts if blue_start <= gs <= end]
 
     def resolve_band_start(self, column, starts):
         active_start = None
