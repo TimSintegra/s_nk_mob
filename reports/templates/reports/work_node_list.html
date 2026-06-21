@@ -31,7 +31,8 @@
     {% if node.has_active_children %}
         <a href="{% url 'work_node_children' node.id %}" class="app-card mb-3">
             {% if node.code %}
-                <h5 class="mb-0">{{ node.code }} {{ node.name }}</h5>
+                <h5>{{ node.code }}</h5>
+                <small>{{ node.name }}</small>
             {% else %}
                 <h5 class="mb-0">{{ node.name }}</h5>
             {% endif %}
@@ -39,7 +40,8 @@
     {% else %}
         <a href="{% url 'add_work_item' node.id %}" class="app-card mb-3">
             {% if node.code %}
-                <h5 class="mb-0">{{ node.code }} {{ node.name }}</h5>
+                <h5>{{ node.code }}</h5>
+                <small>{{ node.name }}</small>
             {% else %}
                 <h5 class="mb-0">{{ node.name }}</h5>
             {% endif %}
