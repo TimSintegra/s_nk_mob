@@ -3,7 +3,7 @@ from datetime import date
 from decimal import Decimal
 
 from django.contrib import messages
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from openpyxl import Workbook
 
@@ -95,9 +95,9 @@ def work_node_list(request, parent_id=None):
 
     if parent_id:
         parent = get_object_or_404(WorkNode, id=parent_id, is_active=True)
-        nodes = parent.children.filter(is_active=True).order_by("id")
+        nodes = parent.children.filter(is_active=True)
     else:
-        nodes = WorkNode.objects.filter(parent__isnull=True, is_active=True).order_by("id")
+        nodes = WorkNode.objects.filter(parent__isnull=True, is_active=True)
 
     return render(
         request,
@@ -170,12 +170,30 @@ def report_summary(request, report_id):
         master=master,
     )
 
-    workers = Worker.objects.filter(
-        brigade=master.brigade,
-        is_active=True,
-    ).order_by("full_name")
+    workers = master.workers.filter(is_active=True).order_by("full_name")
 
     if request.method == "POST":
+        action = request.POST.get("action")
+
+        # --- Add worker to master ---
+        if action == "add_worker":
+            worker_id = request.POST.get("worker_id")
+            if worker_id:
+                worker = get_object_or_404(Worker, id=worker_id, is_active=True)
+                master.workers.add(worker)
+                messages.success(request, f"Рабочий {worker.full_name} добавлен.")
+            return redirect("report_summary", report_id=report.id)
+
+        # --- Remove worker from master ---
+        if action == "remove_worker":
+            worker_id = request.POST.get("worker_id")
+            if worker_id:
+                worker = get_object_or_404(Worker, id=worker_id)
+                master.workers.remove(worker)
+                messages.success(request, f"Рабочий {worker.full_name} удалён.")
+            return redirect("report_summary", report_id=report.id)
+
+        # --- Save report (existing logic) ---
         report.worker_entries.all().delete()
 
         for worker in workers:
@@ -224,6 +242,26 @@ def report_summary(request, report_id):
 
 
 @master_login_required
+def search_workers(request):
+    """JSON endpoint for autocomplete search of workers by name."""
+    q = request.GET.get("q", "").strip()
+    if len(q) < 1:
+        return JsonResponse([], safe=False)
+
+    workers = Worker.objects.filter(is_active=True, full_name__icontains=q).order_by("full_name")[:15]
+
+    data = [
+        {
+            "id": w.id,
+            "full_name": w.full_name,
+            "brigade": w.brigade.name if w.brigade else "",
+        }
+        for w in workers
+    ]
+    return JsonResponse(data, safe=False)
+
+
+@master_login_required
 def timesheet(request):
     master = request.master
     today = date.today()
@@ -244,8 +282,7 @@ def timesheet(request):
 
     main_rows = {}
     extra_rows = {}
-    assigned_workers = Worker.objects.filter(
-        brigade=master.brigade,
+    assigned_workers = master.workers.filter(
         is_active=True,
     ).order_by("full_name")
 

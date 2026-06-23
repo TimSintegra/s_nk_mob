@@ -45,12 +45,13 @@ class WorkNode(models.Model):
         blank=True,
     )
     unit = models.CharField("Единица измерения", max_length=50, blank=True)
+    sort_order = models.IntegerField("Порядок", default=0)
     is_active = models.BooleanField("Активен", default=True)
 
     class Meta:
         verbose_name = "Работа"
         verbose_name_plural = "Дерево работ"
-        ordering = ["id"]
+        ordering = ["sort_order", "id"]
 
     def __str__(self):
         return f"{self.code} - {self.name}"

@@ -14,6 +14,12 @@ class Master(models.Model):
         related_name="masters",
         verbose_name="Бригада",
     )
+    workers = models.ManyToManyField(
+        "core.Worker",
+        blank=True,
+        related_name="masters",
+        verbose_name="Рабочие",
+    )
     is_active = models.BooleanField("Активен", default=True)
 
     class Meta:

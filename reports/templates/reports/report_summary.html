@@ -25,29 +25,51 @@
 
     <h5 class="mt-4 mb-3">Рабочие</h5>
 
+    <div id="workers-list">
     {% for worker in workers %}
-    <div class="border rounded p-2 mb-2">
-        <strong>{{ worker.full_name }}</strong>
-        <div class="row g-2 mt-1">
-            <div class="col-7">
-                <select name="worker_{{ worker.id }}_status" class="form-select worker-status">
-                    <option value="">Время</option>
-                    {% for value, label in worker_statuses %}
-                        <option value="{{ value }}">{{ label }}</option>
-                    {% endfor %}
-                </select>
+        <div class="border rounded p-2 mb-2" data-worker-id="{{ worker.id }}">
+            <div class="d-flex justify-content-between align-items-center">
+                <strong>{{ worker.full_name }}</strong>
+                <button type="button" class="btn btn-sm btn-outline-danger remove-worker-btn"
+                        data-worker-id="{{ worker.id }}"
+                        data-worker-name="{{ worker.full_name }}">✕</button>
             </div>
-            <div class="col-5">
-                <input name="worker_{{ worker.id }}_hours" type="number" step="0.5" class="form-control worker-hours" placeholder="Время">
+            <div class="row g-2 mt-1">
+                <div class="col-7">
+                    <select name="worker_{{ worker.id }}_status" class="form-select worker-status">
+                        <option value="">Время</option>
+                        {% for value, label in worker_statuses %}
+                            <option value="{{ value }}">{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-5">
+                    <input name="worker_{{ worker.id }}_hours" type="number" step="0.5" class="form-control worker-hours" placeholder="Время">
+                </div>
             </div>
         </div>
-    </div>
+    {% empty %}
+        <p id="no-workers-msg" class="text-muted">Рабочие не добавлены. Нажмите «+ Добавить рабочего».</p>
     {% endfor %}
+    </div>
 
     <div id="temporary-workers"></div>
 
+    <!-- Add worker with autocomplete -->
+    <div class="mb-3">
+        <div class="position-relative">
+            <input id="worker-search-input" type="text" class="form-control app-input mb-2"
+                   placeholder="Поиск рабочего по фамилии..." autocomplete="off">
+            <div id="worker-search-results" class="list-group position-absolute w-100 d-none"
+                 style="z-index: 1000; max-height: 200px; overflow-y: auto;"></div>
+        </div>
+        <button type="button" id="add-worker-btn" class="btn btn-outline-primary w-100 mb-3" disabled>
+            + Добавить рабочего
+        </button>
+    </div>
+
     <button type="button" class="btn btn-outline-primary w-100 mb-3" onclick="addTemporaryWorker()">
-        + Добавить рабочего
+        + Добавить временного рабочего
     </button>
 
     <button class="app-button w-100 mb-2">
@@ -55,11 +77,105 @@
     </button>
 </form>
 
+<!-- Hidden form for add/remove worker actions -->
+<form id="worker-action-form" method="post" class="d-none">
+    {% csrf_token %}
+    <input type="hidden" name="worker_id" id="worker-action-worker-id">
+    <input type="hidden" name="action" id="worker-action-type">
+</form>
+
 <a href="{% url 'work_node_list' %}" class="btn btn-outline-primary w-100">
     Добавить ещё работу
 </a>
 
 <script>
+// --- Search autocomplete ---
+const searchInput = document.getElementById("worker-search-input");
+const searchResults = document.getElementById("worker-search-results");
+const addWorkerBtn = document.getElementById("add-worker-btn");
+let selectedWorkerId = null;
+let searchTimeout = null;
+
+searchInput.addEventListener("input", function() {
+    clearTimeout(searchTimeout);
+    const q = this.value.trim();
+
+    if (q.length < 1) {
+        searchResults.classList.add("d-none");
+        addWorkerBtn.disabled = true;
+        selectedWorkerId = null;
+        return;
+    }
+
+    searchTimeout = setTimeout(() => {
+        fetch("{% url 'search_workers' %}?q=" + encodeURIComponent(q))
+            .then(r => r.json())
+            .then(data => {
+                searchResults.innerHTML = "";
+                if (data.length === 0) {
+                    searchResults.innerHTML = '<div class="list-group-item text-muted">Ничего не найдено</div>';
+                } else {
+                    data.forEach(w => {
+                        const item = document.createElement("button");
+                        item.type = "button";
+                        item.className = "list-group-item list-group-item-action";
+                        item.textContent = w.full_name + (w.brigade ? " (" + w.brigade + ")" : "");
+                        item.dataset.workerId = w.id;
+                        item.addEventListener("click", function() {
+                            selectWorker(w.id, w.full_name);
+                        });
+                        searchResults.appendChild(item);
+                    });
+                }
+                searchResults.classList.remove("d-none");
+            });
+    }, 200);
+});
+
+searchInput.addEventListener("blur", function() {
+    // Delay hiding so click on result registers
+    setTimeout(() => searchResults.classList.add("d-none"), 200);
+});
+
+searchInput.addEventListener("focus", function() {
+    if (this.value.trim().length >= 1) {
+        searchResults.classList.remove("d-none");
+    }
+});
+
+function selectWorker(id, name) {
+    selectedWorkerId = id;
+    searchInput.value = name;
+    searchResults.classList.add("d-none");
+    addWorkerBtn.disabled = false;
+}
+
+addWorkerBtn.addEventListener("click", function() {
+    if (!selectedWorkerId) return;
+
+    // Check if worker already added
+    if (document.querySelector(`[data-worker-id="${selectedWorkerId}"]`)) {
+        alert("Этот рабочий уже добавлен.");
+        return;
+    }
+
+    // Submit add action via hidden form
+    document.getElementById("worker-action-worker-id").value = selectedWorkerId;
+    document.getElementById("worker-action-type").value = "add_worker";
+    document.getElementById("worker-action-form").submit();
+});
+
+// --- Remove workers ---
+document.querySelectorAll(".remove-worker-btn").forEach(btn => {
+    btn.addEventListener("click", function() {
+        if (!confirm(`Удалить рабочего ${this.dataset.workerName} из вашего списка?`)) return;
+        document.getElementById("worker-action-worker-id").value = this.dataset.workerId;
+        document.getElementById("worker-action-type").value = "remove_worker";
+        document.getElementById("worker-action-form").submit();
+    });
+});
+
+// --- Temporary workers ---
 function addTemporaryWorker() {
     const container = document.getElementById("temporary-workers");
 
