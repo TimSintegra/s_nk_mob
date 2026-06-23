@@ -3,6 +3,7 @@ from datetime import date
 from decimal import Decimal
 
 from django.contrib import messages
+from django.db.models import Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from openpyxl import Workbook
@@ -170,7 +171,10 @@ def report_summary(request, report_id):
         master=master,
     )
 
-    workers = master.workers.filter(is_active=True).order_by("full_name")
+    workers = Worker.objects.filter(
+        Q(brigade=master.brigade, is_active=True) |
+        Q(masters=master, is_active=True)
+    ).distinct().order_by("full_name")
 
     if request.method == "POST":
         action = request.POST.get("action")
@@ -259,6 +263,21 @@ def search_workers(request):
         for w in workers
     ]
     return JsonResponse(data, safe=False)
+
+
+@master_login_required
+def delete_work_item(request, work_item_id):
+    """Delete a work item from a report (only if report is still a draft)."""
+    work_item = get_object_or_404(
+        ReportWorkItem,
+        id=work_item_id,
+        report__master=request.master,
+        report__status=DailyReport.STATUS_DRAFT,
+    )
+    report_id = work_item.report_id
+    work_item.delete()
+    messages.success(request, "Работа удалена из отчёта.")
+    return redirect("report_summary", report_id=report_id)
 
 
 @master_login_required

@@ -9,7 +9,7 @@ from openpyxl import load_workbook
 from core.models import WorkNode
 
 
-CODE_PATTERN = re.compile(r"([A-ZА-ЯЁ]{2}\d{2}(?:-\d+)*)", re.IGNORECASE)
+CODE_PATTERN = re.compile(r"([A-ZА-ЯЁ]{2}(?:\d{2}|/[A-Z]{2})(?:-\d+)*)", re.IGNORECASE)
 GROUP_PATTERN = re.compile(r"^\s*\d+\.\s")
 
 CODE_TRANSLATION = str.maketrans(

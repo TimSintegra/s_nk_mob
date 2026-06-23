@@ -15,4 +15,5 @@ urlpatterns = [
     path("reports/", views.report_calendar, name="report_calendar"),
     path("reports/<int:report_id>/excel/", views.export_report_excel, name="export_report_excel"),
     path("workers/search/", views.search_workers, name="search_workers"),
+    path("work-item/<int:work_item_id>/delete/", views.delete_work_item, name="delete_work_item"),
 ]

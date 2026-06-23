@@ -11,11 +11,17 @@
 {% for work in report.work_items.all %}
 <div class="card mb-3">
     <div class="card-body">
-        <h6>{{ work.site_name }}</h6>
-        <p class="mb-1"><strong>Работа:</strong> {{ work.work_node.code }} — {{ work.work_node.name }}</p>
-        <p class="mb-1"><strong>Объём:</strong> {{ work.quantity }} {{ work.work_node.unit }}</p>
-        <p class="mb-1"><strong>Титул:</strong> {{ work.title|default:"—" }}</p>
-        <p class="mb-0"><strong>Раздел:</strong> {{ work.project_section|default:"—" }}</p>
+        <div class="d-flex justify-content-between align-items-start">
+            <div class="flex-grow-1">
+                <h6>{{ work.site_name }}</h6>
+                <p class="mb-1"><strong>Работа:</strong> {{ work.work_node.code }} — {{ work.work_node.name }}</p>
+                <p class="mb-1"><strong>Объём:</strong> {{ work.quantity }} {{ work.work_node.unit }}</p>
+                <p class="mb-1"><strong>Титул:</strong> {{ work.title|default:"—" }}</p>
+                <p class="mb-0"><strong>Раздел:</strong> {{ work.project_section|default:"—" }}</p>
+            </div>
+            <a href="{% url 'delete_work_item' work.id %}" class="btn btn-sm btn-outline-danger ms-2"
+               onclick="return confirm('Удалить эту работу из отчёта?')">✕</a>
+        </div>
     </div>
 </div>
 {% endfor %}
@@ -115,7 +121,14 @@ searchInput.addEventListener("input", function() {
                 if (data.length === 0) {
                     searchResults.innerHTML = '<div class="list-group-item text-muted">Ничего не найдено</div>';
                 } else {
+                    // Get IDs of workers already on the page
+                    const existingIds = new Set();
+                    document.querySelectorAll("[data-worker-id]").forEach(el => {
+                        existingIds.add(parseInt(el.dataset.workerId));
+                    });
+
                     data.forEach(w => {
+                        if (existingIds.has(w.id)) return; // skip already added
                         const item = document.createElement("button");
                         item.type = "button";
                         item.className = "list-group-item list-group-item-action";
@@ -126,6 +139,11 @@ searchInput.addEventListener("input", function() {
                         });
                         searchResults.appendChild(item);
                     });
+
+                    // Show message if all matching workers are already added
+                    if (searchResults.children.length === 0) {
+                        searchResults.innerHTML = '<div class="list-group-item text-muted">Все найденные уже добавлены</div>';
+                    }
                 }
                 searchResults.classList.remove("d-none");
             });
