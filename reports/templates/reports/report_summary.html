@@ -121,9 +121,9 @@ searchInput.addEventListener("input", function() {
                 if (data.length === 0) {
                     searchResults.innerHTML = '<div class="list-group-item text-muted">Ничего не найдено</div>';
                 } else {
-                    // Get IDs of workers already on the page
+                    // Get IDs of workers already on the page (only from workers list, not search results)
                     const existingIds = new Set();
-                    document.querySelectorAll("[data-worker-id]").forEach(el => {
+                    document.querySelectorAll("#workers-list [data-worker-id]").forEach(el => {
                         existingIds.add(parseInt(el.dataset.workerId));
                     });
 
@@ -171,8 +171,8 @@ function selectWorker(id, name) {
 addWorkerBtn.addEventListener("click", function() {
     if (!selectedWorkerId) return;
 
-    // Check if worker already added
-    if (document.querySelector(`[data-worker-id="${selectedWorkerId}"]`)) {
+    // Check if worker already added (only in workers list, not in search results)
+    if (document.querySelector(`#workers-list [data-worker-id="${selectedWorkerId}"]`)) {
         alert("Этот рабочий уже добавлен.");
         return;
     }
