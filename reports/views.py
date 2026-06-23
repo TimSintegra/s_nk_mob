@@ -320,27 +320,30 @@ def timesheet(request):
     ).select_related("report", "worker")
 
     for entry in entries:
-        rows = main_rows
-
-        if entry.worker and entry.worker.brigade_id == master.brigade_id:
+        if entry.worker:
             key = ("worker", entry.worker_id)
-            if key not in rows:
-                rows[key] = {
-                    "name": entry.worker.full_name,
-                    "short_name": short_full_name(entry.worker.full_name),
-                    "cells": [""] * days_count,
-                    "sort_name": entry.worker.full_name.lower(),
-                }
-        elif entry.worker:
-            rows = extra_rows
-            key = ("worker", entry.worker_id)
-            if key not in rows:
-                rows[key] = {
-                    "name": entry.worker.full_name,
-                    "short_name": short_full_name(entry.worker.full_name),
-                    "cells": [""] * days_count,
-                    "sort_name": entry.worker.full_name.lower(),
-                }
+            # Если рабочий уже в main_rows (назначен мастеру) — пишем туда,
+            # даже если бригада другая. Иначе — в extra_rows.
+            if key in main_rows:
+                rows = main_rows
+            elif entry.worker.brigade_id == master.brigade_id:
+                rows = main_rows
+                if key not in rows:
+                    rows[key] = {
+                        "name": entry.worker.full_name,
+                        "short_name": short_full_name(entry.worker.full_name),
+                        "cells": [""] * days_count,
+                        "sort_name": entry.worker.full_name.lower(),
+                    }
+            else:
+                rows = extra_rows
+                if key not in rows:
+                    rows[key] = {
+                        "name": entry.worker.full_name,
+                        "short_name": short_full_name(entry.worker.full_name),
+                        "cells": [""] * days_count,
+                        "sort_name": entry.worker.full_name.lower(),
+                    }
         else:
             rows = extra_rows
             name = entry.temporary_worker_name.strip()
