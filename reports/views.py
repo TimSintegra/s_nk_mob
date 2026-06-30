@@ -145,11 +145,23 @@ def add_work_item(request, work_node_id):
 
         action = request.POST.get("action")
 
-        if action == "finish":
-            return redirect("report_summary", report_id=report.id)
+        if action == "new":
+            # Запоминаем Объект и Титул для следующего вида работ
+            if site_name:
+                request.session["remembered_site_name"] = site_name
+            if title:
+                request.session["remembered_title"] = title
+            messages.success(request, "Работа добавлена. Выберите следующий вид работ.")
+            return redirect("work_node_list")
 
-        messages.success(request, "Работа добавлена. Выберите следующий вид работ.")
-        return redirect("work_node_list")
+        # action == "finish" — очищаем запомненные поля
+        request.session.pop("remembered_site_name", None)
+        request.session.pop("remembered_title", None)
+        return redirect("report_summary", report_id=report.id)
+
+    # GET — подставляем запомненные значения из сессии
+    remembered_site_name = request.session.get("remembered_site_name", "")
+    remembered_title = request.session.get("remembered_title", "")
 
     return render(
         request,
@@ -157,6 +169,8 @@ def add_work_item(request, work_node_id):
         {
             "work_node": work_node,
             "today": date.today(),
+            "remembered_site_name": remembered_site_name,
+            "remembered_title": remembered_title,
         },
     )
 
