@@ -12,3 +12,4 @@ logs/*.log
 .idea/
 .vscode/
 *.dump
+.DS_Store
