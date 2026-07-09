@@ -12,5 +12,19 @@ services:
     volumes:
       - worker_reports_postgres_data:/var/lib/postgresql/data
 
+  web:
+    build: .
+    container_name: s_nk_mob_web
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: worker_reports_db
+      POSTGRES_PORT: "5432"
+    depends_on:
+      - db
+
 volumes:
   worker_reports_postgres_data:
