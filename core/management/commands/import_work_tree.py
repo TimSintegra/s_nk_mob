@@ -1,6 +1,28 @@
-from dataclasses import dataclass
-from pathlib import Path
+"""
+Import work tree from structured Excel workbook "Структура ЕР.xlsx".
+
+Each sheet is an independent root tree. Hierarchy is determined by
+code depth (number of dashes), NOT by row number.
+
+Code levels:
+  d0 = root or category (e.g. "MOHTA", "EL00")
+  d1 = subcategory (e.g. "EL00-08", "CS00-01")
+  d2 = group (e.g. "EL00-08-02", "CS00-02-05")
+  d3+ = leaf element (e.g. "EL00-08-02-60", "CS00-01-01-13")
+
+Units (метр, шт) are attributes on elements, not tree nodes.
+
+Parent resolution uses per-band state tracking:
+  - Each column band has a state tracking the most recent node at each level
+  - When a new d1 appears, it becomes the subcategory for its band
+  - When a new d2 appears under that d1, it becomes the group
+  - When a d3 appears, it becomes a child of the current group (or subcategory)
+"""
+
 import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
@@ -9,457 +31,360 @@ from openpyxl import load_workbook
 from core.models import WorkNode
 
 
-CODE_PATTERN = re.compile(r"([A-ZА-ЯЁ]{2}(?:\d{2}|/[A-Z]{2})(?:-\d+)*)", re.IGNORECASE)
-GROUP_PATTERN = re.compile(r"^\s*\d+\.\s")
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 
-# Only REAL units of measurement — NOT categories like "1-жильный"
-UNIT_KEYWORDS = re.compile(
-    r"^(?:шт|метры?|метр|тонны?|тонна|тонн|м[23]|кг|"
-    r"килограмм[ыа]?|"
-    r"100м(?:2)?|10м[23]|"
-    r"модуль|комплект|"
-    r"т\*км)$",
+CODE_PATTERN = re.compile(
+    r"([A-ZА-ЯЁ]{2}[/A-ZА-ЯЁ]{0,3}(?:\d{2})?(?:-\d+)*)",
     re.IGNORECASE,
 )
 
-CODE_TRANSLATION = str.maketrans(
-    {
-        "А": "A",
-        "В": "B",
-        "С": "C",
-        "Е": "E",
-        "Н": "H",
-        "К": "K",
-        "М": "M",
-        "О": "O",
-        "Р": "P",
-        "Т": "T",
-        "Х": "X",
-        "У": "Y",
-        "І": "I",
-        "Ї": "I",
-        "Ё": "E",
-        "а": "A",
-        "в": "B",
-        "с": "C",
-        "е": "E",
-        "н": "H",
-        "к": "K",
-        "м": "M",
-        "о": "O",
-        "р": "P",
-        "т": "T",
-        "х": "X",
-        "у": "Y",
-        "і": "I",
-        "ї": "I",
-        "ё": "E",
-    }
+UNIT_KEYWORDS = re.compile(
+    r"^(?:шт(?:ук[аи]?)?|"
+    r"метры?|метр|"
+    r"тонны?|тонна|тонн|"
+    r"м[234]|"
+    r"кг|"
+    r"килограмм[ыа]?|"
+    r"100м(?:2)?|"
+    r"10м[23]|"
+    r"модуль|комплект|"
+    r"т[\*\.]км|"
+    r"усл\.\s*метр|"
+    r"лоток|"
+    r"комплект)$",
+    re.IGNORECASE,
 )
 
+CODE_TRANSLATION = str.maketrans({
+    "А": "A", "В": "B", "С": "C", "Е": "E", "Н": "H",
+    "К": "K", "М": "M", "О": "O", "Р": "P", "Т": "T",
+    "Х": "X", "У": "Y", "І": "I", "Ї": "I", "Ё": "E",
+    "а": "A", "в": "B", "с": "C", "е": "E", "н": "H",
+    "к": "K", "м": "M", "о": "O", "р": "P", "т": "T",
+    "х": "X", "у": "Y", "і": "I", "ї": "I", "ё": "E",
+})
 
-@dataclass(frozen=True)
-class SectionConfig:
-    root_code: str
-    root_name: str | None
-    root_cell: str
-    blue_row: int
-    blue_starts: list[int]
-    green_row: int
-    green_starts: list[int]
-    end_row: int
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def normalize_code(code: str) -> str:
+    return code.translate(CODE_TRANSLATION).upper()
+
+
+def code_depth(code: str) -> int:
+    """Number of dashes = hierarchy depth level."""
+    return code.count("-")
+
+
+def extract_code(text: str) -> tuple[str, str]:
+    """Extract code and remaining name from text.
+    Returns (code, name) or ("", text) if no code found.
+    """
+    m = CODE_PATTERN.search(text)
+    if not m:
+        return "", text.strip()
+    code = normalize_code(m.group(1))
+    name = text[m.end():].strip()
+    return code, name or code
+
+
+def is_unit(text: str) -> bool:
+    if not text or len(text) > 30:
+        return False
+    if CODE_PATTERN.search(text):
+        return False
+    return bool(UNIT_KEYWORDS.match(text.strip()))
+
+
+def clean(text: str) -> str:
+    """Normalize whitespace, strip leading punctuation."""
+    if not text:
+        return ""
+    t = str(text).replace("\r", " ").replace("\n", " ").replace("\xa0", " ")
+    t = re.sub(r"\s+", " ", t).strip()
+    t = re.sub(r"^[\s.\-–—:]+", "", t)
+    return t.strip()
+
+
+# ---------------------------------------------------------------------------
+# Band state — tracks context within a column range
+# ---------------------------------------------------------------------------
 
 @dataclass
 class BandState:
-    blue: WorkNode | None = None
-    green: WorkNode | None = None
-    group: WorkNode | None = None
-    label: WorkNode | None = None
+    """Current context for a column band.
 
+    Each band starts at a specific column (from row 2 category cells).
+    As we scan rows, the state updates with the most recent node at each level.
+
+    Variants are tracked per-group (not per-band), because each group
+    can have its own set of variants (e.g. "1-жильный" under EL00-08-02
+    vs "1-4 жил" under II00-03-01).
+    """
+    category: Optional[WorkNode] = None
+    subcategory: Optional[WorkNode] = None   # d1
+    group: Optional[WorkNode] = None         # d2
+    group_variant: dict = field(default_factory=dict)  # group_node → variant_node
+    unit: str = ""
+
+    @property
+    def variant(self):
+        """Current variant = the variant for the current group."""
+        if self.group and self.group in self.group_variant:
+            return self.group_variant[self.group]
+        return None
+
+    def set_variant(self, variant):
+        """Set variant for the current group."""
+        if self.group:
+            self.group_variant[self.group] = variant
+
+    def clear_variant_for(self, group):
+        """Remove variant when a new group replaces this one."""
+        self.group_variant.pop(group, None)
+
+
+# ---------------------------------------------------------------------------
+# Command
+# ---------------------------------------------------------------------------
 
 class Command(BaseCommand):
-    help = "Import work tree from the structured Excel workbook"
+    help = "Import work tree from structured Excel workbook"
 
     def add_arguments(self, parser):
         parser.add_argument("file_path", type=str)
-        parser.add_argument("--clear", action="store_true")
+        parser.add_argument("--clear", action="store_true",
+                            help="Deactivate all existing nodes before import")
+        parser.add_argument("--verbose", action="store_true",
+                            help="Print detailed info for each node")
 
     def handle(self, *args, **options):
         file_path = Path(options["file_path"])
         if not file_path.exists():
-            raise CommandError(f"Файл не найден: {file_path}")
+            raise CommandError(f"File not found: {file_path}")
 
         workbook = load_workbook(file_path, data_only=True)
         if not workbook.worksheets:
-            raise CommandError("В книге нет листов.")
+            raise CommandError("No sheets in workbook.")
+
+        verbose = options["verbose"]
 
         if options["clear"]:
-            deactivated_count = WorkNode.objects.update(is_active=False)
-        else:
-            deactivated_count = 0
+            deactivated = WorkNode.objects.update(is_active=False)
+            self.stdout.write(f"Deactivated: {deactivated}")
 
-        created_count = 0
-        updated_count = 0
-        imported_keys = set()
+        total_c = total_u = 0
 
         with transaction.atomic():
             for sheet in workbook.worksheets:
-                section = self.detect_section(sheet)
-                if section is None:
-                    self.stdout.write(self.style.WARNING(
-                        f"Пропущен лист '{sheet.title}': не удалось определить заголовок"
-                    ))
-                    continue
+                self.stdout.write(f"\n{'=' * 60}")
+                self.stdout.write(f"Sheet: {sheet.title}")
 
-                self.stdout.write(f"  Лист '{sheet.title}' → {section.root_code} "
-                                  f"(синих={len(section.blue_starts)} "
-                                  f"зелёных={len(section.green_starts)} "
-                                  f"строк={section.end_row})")
+                c, u = self.import_sheet(sheet, verbose)
+                total_c += c
+                total_u += u
 
-                s_created, s_updated, s_keys = self.import_section(sheet, section)
-                created_count += s_created
-                updated_count += s_updated
-                imported_keys.update(s_keys)
-
-            # Post-processing: rebuild tree structure by code prefixes
+            # Post-processing: rebuild tree by code prefix matching
             moved = self.rebuild_tree_by_codes()
             if moved:
-                self.stdout.write(f"  Перестроено связей по кодам: {moved}")
+                self.stdout.write(f"\nRebuilt {moved} parent links by code prefix")
 
             # Post-processing: clear units from parent nodes
             cleared = self.clear_units_from_parents()
             if cleared:
-                self.stdout.write(f"  Очищены единицы с {cleared} родительских узлов")
+                self.stdout.write(f"Cleared units from {cleared} parent nodes")
 
-        self.stdout.write(self.style.SUCCESS("Импорт завершён."))
-        self.stdout.write(f"Создано: {created_count}")
-        self.stdout.write(f"Обновлено: {updated_count}")
-        self.stdout.write(f"Уникальных узлов: {len(imported_keys)}")
-        if options["clear"]:
-            self.stdout.write(f"Скрыто устаревших узлов: {deactivated_count}")
+        self.stdout.write(self.style.SUCCESS(f"\nDone. Created: {total_c}, Updated: {total_u}"))
 
-    def clear_units_from_parents(self):
-        """Remove units from all nodes that have active children.
+    # ------------------------------------------------------------------
+    # Sheet import
+    # ------------------------------------------------------------------
 
-        Only leaf nodes (works without children) should have units.
-        Parent/navigation nodes should NOT have units.
-        """
-        parent_ids = WorkNode.objects.filter(
-            is_active=True,
-            children__is_active=True,
-        ).values_list("id", flat=True).distinct()
+    def import_sheet(self, sheet, verbose=False):
+        grid = self._read_grid(sheet)
 
-        count = WorkNode.objects.filter(
-            id__in=list(parent_ids),
-        ).exclude(unit="").update(unit="")
-
-        return count
-
-    def rebuild_tree_by_codes(self):
-        """Re-parent nodes based on code prefix matching.
-
-        Rule: if node B's code starts with node A's code + "-",
-        then A is the parent of B.
-        Example: DW00-10-01-01 is parent of DW00-10-01-01-03
-        """
-        nodes = list(
-            WorkNode.objects.filter(is_active=True)
-            .exclude(code="")
-            .order_by("code")
-            .values_list("id", "code", "parent_id")
-        )
-
-        code_to_node = {}
-        for node_id, code, parent_id in nodes:
-            normalized = code.replace(" ", "")
-            code_to_node[normalized] = (node_id, parent_id)
-
-        moved = 0
-        for node_id, code, current_parent_id in nodes:
-            normalized = code.replace(" ", "")
-            best_parent = None
-            best_len = 0
-
-            for candidate_code, (candidate_id, _) in code_to_node.items():
-                if candidate_id == node_id:
-                    continue
-                if normalized.startswith(candidate_code + "-") and len(candidate_code) > best_len:
-                    best_parent = candidate_id
-                    best_len = len(candidate_code)
-
-            if best_parent and best_parent != current_parent_id:
-                WorkNode.objects.filter(id=node_id).update(parent_id=best_parent)
-                moved += 1
-
-        return moved
-
-    def detect_section(self, sheet):
-        """Автоопределение структуры раздела из листа Excel.
-
-        Ожидаемая раскладка листа:
-          Строка 1 (розовая)  — корень раздела, напр. "EL00 ЭЛЕКТРОМОНТАЖНЫЕ РАБОТЫ"
-          Строка 2 (синяя)    — подразделы первого уровня
-          Строка 3 (зелёная)  — подразделы второго уровня
-          Строки 4+ (белые)   — конкретные работы
-        """
-        # --- корень: ячейка A1 ---
-        root_cell = sheet.cell(row=1, column=1)
-        root_text = str(root_cell.value).strip() if root_cell.value is not None else ""
-
+        # Root from A1
+        root_text = grid.get((1, 1), "")
         if not root_text:
-            root_text = sheet.title.strip()
-        if not root_text:
-            return None
+            self.stdout.write(self.style.WARNING(f"  Skipped: no A1"))
+            return 0, 0
 
-        root_text = self.normalize_text(root_text)
-        extracted = self.extract_code_and_name(root_text)
-        root_code = extracted[0] if extracted else root_text
+        root_code, root_name = extract_code(root_text)
+        if not root_code:
+            root_code = self._sheet_code(sheet.title)
+        if not root_name:
+            root_name = root_text
 
-        # --- синие колонки из строки 2 ---
-        blue_starts = sorted(set(
-            cell.column for cell in sheet[2]
-            if cell.value and isinstance(cell.value, str) and cell.value.strip()
-        ))
-
-        # --- зелёные колонки из строки 3 ---
-        green_starts = sorted(set(
-            cell.column for cell in sheet[3]
-            if cell.value and isinstance(cell.value, str) and cell.value.strip()
-        ))
-
-        # Если какой-то ряд пуст — подменяем умолчанием
-        if not blue_starts:
-            blue_starts = [1]
-        if not green_starts:
-            green_starts = blue_starts[:]  # если зелёных нет, используем синие
-
-        return SectionConfig(
-            root_code=root_code,
-            root_name=None,
-            root_cell="A1",
-            blue_row=2,
-            blue_starts=blue_starts,
-            green_row=3,
-            green_starts=green_starts,
-            end_row=sheet.max_row,
+        root_node, _ = self._upsert(
+            f"{sheet.title}:A1", root_code, root_name, None,
         )
+        self.stdout.write(f"  Root: {root_code} | {root_name[:50]}")
 
-    def import_section(self, sheet, section):
-        band_states = self.build_band_states(section)
-        # Track current unit per green band (green_start -> unit string)
-        current_unit = {gs: "" for gs in section.green_starts}
-        created_count = 0
-        updated_count = 0
-        imported_keys = set()
+        # Band starts from row 2 (categories define column ranges)
+        band_starts = self._band_starts_from_row2(grid)
+        self.stdout.write(f"  Bands: {band_starts}")
 
-        root_source_key = f"{section.root_code}:{section.root_cell}"
-        root_cell_value = sheet[section.root_cell].value
-        if section.root_name:
-            root_name = section.root_name
-        else:
-            extracted_root = self.extract_code_and_name(self.normalize_text(root_cell_value)) if isinstance(root_cell_value, str) else None
-            root_name = extracted_root[1] if extracted_root else self.extract_cell_name(root_cell_value)
-        root_node, created = self.upsert_node(
-            source_key=root_source_key,
-            code=section.root_code,
-            name=root_name or section.root_code,
-            parent=None,
-        )
-        created_count += int(created)
-        updated_count += int(not created)
-        imported_keys.add(root_source_key)
+        # Initialize band states
+        states = {s: BandState() for s in band_starts}
 
-        blue_created, blue_updated = self.assign_blue_node(root_node, section, band_states, imported_keys, sheet)
-        created_count += blue_created
-        updated_count += blue_updated
+        # Process row 2 — set category for each band
+        self._process_row2(grid, sheet.title, root_node, band_starts, states, verbose)
 
-        green_created, green_updated, green_units = self.assign_green_nodes(root_node, section, band_states, imported_keys, sheet)
-        created_count += green_created
-        updated_count += green_updated
+        # Process rows 3+ — all coded cells, units, variants
+        created = updated = 0
+        max_row = max((r for r, _ in grid), default=1)
 
-        # Merge units detected in the green row into current_unit
-        current_unit.update(green_units)
-
-        for row_index in range(section.green_row + 1, section.end_row + 1):
-            row = sheet[row_index]
-            for cell in row:
-                if not isinstance(cell.value, str):
-                    continue
-
-                text = self.normalize_text(cell.value)
+        for row_num in range(3, max_row + 1):
+            for col in sorted(c for r, c in grid if r == row_num):
+                text = grid[(row_num, col)]
                 if not text:
                     continue
 
-                band_start = self.resolve_band_start(cell.column, section.green_starts)
-                if band_start is None:
+                band = self._resolve_band(col, band_starts)
+                state = states.get(band)
+                parent = self._pick_parent(state, root_node)
+
+                # Unit → update state, skip node creation
+                if is_unit(text):
+                    if state:
+                        state.unit = text.strip()
+                    if verbose:
+                        self.stdout.write(f"    [R{row_num}C{col:2d}] UNIT: {text[:30]}")
                     continue
 
-                state = band_states[band_start]
-                source_key = f"{section.root_code}:{cell.coordinate}"
-                imported_keys.add(source_key)
+                # Extract code
+                code, name = extract_code(text)
 
-                # Detect unit cells — only REAL units (шт, метр, тонна...)
-                unit = self.detect_unit_cell(text)
-                if unit:
-                    current_unit[band_start] = unit
-                    # Unit cell — don't create a WorkNode, just update the band's current unit
-                    continue
+                if code:
+                    depth = code_depth(code)
+                    unit = ""
+                    if depth >= 3 and state:
+                        unit = state.unit
 
-                extracted = self.extract_code_and_name(text)
-                if extracted:
-                    code, name = extracted
-                    if GROUP_PATTERN.match(text):
-                        parent = state.green or state.blue or root_node
-                        node, created = self.upsert_node(
-                            source_key=source_key,
-                            code=code,
-                            name=name,
-                            parent=parent,
-                            unit=current_unit.get(band_start, ""),
+                    node, was_new = self._upsert(
+                        f"{sheet.title}:R{row_num}C{col}",
+                        code, name, parent, unit,
+                    )
+                    created += int(was_new)
+                    updated += int(not was_new)
+
+                    # Update band state based on depth
+                    if state:
+                        if depth == 1:
+                            state.subcategory = node
+                            state.group = None
+                            state.group_variant.clear()
+                            state.unit = ""
+                        elif depth == 2:
+                            state.group = node
+                            state.group_variant.pop(node, None)
+
+                    if verbose:
+                        self.stdout.write(
+                            f"    [R{row_num}C{col:2d}] d{depth} "
+                            f"{code:20s} {name[:35]}"
+                            + (f" [{unit}]" if unit else "")
                         )
-                        state.group = node
-                        state.label = None
-                    else:
-                        parent = state.label or state.group or state.green or state.blue or root_node
-                        node, created = self.upsert_node(
-                            source_key=source_key,
-                            code=code,
-                            name=name,
-                            parent=parent,
-                            unit=current_unit.get(band_start, ""),
+                else:
+                    # Codeless text → variant or label
+                    node, was_new = self._upsert(
+                        f"{sheet.title}:R{row_num}C{col}",
+                        "", name, parent,
+                    )
+                    created += int(was_new)
+                    updated += int(not was_new)
+
+                    if state:
+                        state.set_variant(node)
+
+                    if verbose:
+                        self.stdout.write(
+                            f"    [R{row_num}C{col:2d}] LABEL: {name[:45]}"
                         )
-                    created_count += int(created)
-                    updated_count += int(not created)
-                    continue
 
-                # Text without code (categories like "1-жильный", "металлический", etc.)
-                parent = state.group or state.green or state.blue or root_node
-                node, created = self.upsert_node(
-                    source_key=source_key,
-                    code="",
-                    name=text,
-                    parent=parent,
-                    unit=current_unit.get(band_start, ""),
-                )
-                state.label = node
-                created_count += int(created)
-                updated_count += int(not created)
+        self.stdout.write(f"  Created: {created}, Updated: {updated}")
+        return created, updated
 
-        return created_count, updated_count, imported_keys
+    # ------------------------------------------------------------------
+    # Grid
+    # ------------------------------------------------------------------
 
-    def assign_blue_node(self, root_node, section, band_states, imported_keys, sheet):
-        created_count = 0
-        updated_count = 0
-        for cell in sheet[section.blue_row]:
-            if not isinstance(cell.value, str):
-                continue
+    def _read_grid(self, sheet):
+        grid = {}
+        for row in sheet.iter_rows():
+            for cell in row:
+                if cell.value is not None:
+                    val = clean(str(cell.value))
+                    if val:
+                        grid[(cell.row, cell.column)] = val
+        return grid
 
-            text = self.normalize_text(cell.value)
-            if not text:
-                continue
+    # ------------------------------------------------------------------
+    # Bands
+    # ------------------------------------------------------------------
 
-            blue_start = self.resolve_band_start(cell.column, section.blue_starts)
-            if blue_start is None:
-                continue
+    def _band_starts_from_row2(self, grid):
+        """Band start columns = non-empty columns in row 2."""
+        return sorted({col for (r, col), _ in grid.items() if r == 2})
 
-            source_key = f"{section.root_code}:{cell.coordinate}"
-            imported_keys.add(source_key)
-
-            extracted = self.extract_code_and_name(text)
-            code = extracted[0] if extracted else ""
-            name = extracted[1] if extracted else text
-
-            node, created = self.upsert_node(
-                source_key=source_key,
-                code=code,
-                name=name,
-                parent=root_node,
-            )
-
-            for green_start in self.green_starts_for_blue(section, blue_start):
-                state = band_states[green_start]
-                state.blue = node
-                state.green = None
-                state.group = None
-                state.label = None
-
-            created_count += int(created)
-            updated_count += int(not created)
-
-        return created_count, updated_count
-
-    def assign_green_nodes(self, root_node, section, band_states, imported_keys, sheet):
-        created_count = 0
-        updated_count = 0
-        green_units = {}  # green_start -> unit, for units found in the green row
-
-        for cell in sheet[section.green_row]:
-            if not isinstance(cell.value, str):
-                continue
-
-            text = self.normalize_text(cell.value)
-            if not text:
-                continue
-
-            green_start = self.resolve_band_start(cell.column, section.green_starts)
-            if green_start is None:
-                continue
-
-            state = band_states[green_start]
-            parent = state.blue or root_node
-            source_key = f"{section.root_code}:{cell.coordinate}"
-            imported_keys.add(source_key)
-
-            extracted = self.extract_code_and_name(text)
-            code = extracted[0] if extracted else ""
-            name = extracted[1] if extracted else text
-
-            # Green row cells might also contain units (e.g. II00 BI3='тонна')
-            unit = self.detect_unit_cell(text) if not code else None
-            if unit:
-                green_units[green_start] = unit
-                continue
-
-            node, created = self.upsert_node(
-                source_key=source_key,
-                code=code,
-                name=name,
-                parent=parent,
-            )
-
-            state.green = node
-            state.group = None
-            state.label = None
-
-            created_count += int(created)
-            updated_count += int(not created)
-
-        return created_count, updated_count, green_units
-
-    def build_band_states(self, section):
-        return {start: BandState() for start in section.green_starts}
-
-    def green_starts_for_blue(self, section, blue_start):
-        blue_starts = sorted(section.blue_starts)
-        start_index = blue_starts.index(blue_start)
-        if start_index + 1 < len(blue_starts):
-            end = blue_starts[start_index + 1] - 1
-        else:
-            end = max(section.green_starts, default=0) + 50
-        return [gs for gs in section.green_starts if blue_start <= gs <= end]
-
-    def resolve_band_start(self, column, starts):
-        active_start = None
-        for start in sorted(starts):
-            if start <= column:
-                active_start = start
+    def _resolve_band(self, col, band_starts):
+        best = None
+        for s in band_starts:
+            if s <= col:
+                best = s
             else:
                 break
-        return active_start
+        return best
 
-    def upsert_node(self, source_key, code, name, parent, unit=""):
-        node, created = WorkNode.objects.update_or_create(
+    def _pick_parent(self, state, root):
+        if state and state.variant:
+            return state.variant
+        if state and state.group:
+            return state.group
+        if state and state.subcategory:
+            return state.subcategory
+        if state and state.category:
+            return state.category
+        return root
+
+    # ------------------------------------------------------------------
+    # Row 2 processing
+    # ------------------------------------------------------------------
+
+    def _process_row2(self, grid, sheet_name, root, band_starts, states, verbose):
+        """Row 2 cells → category nodes."""
+        for (row, col), text in sorted(grid.items()):
+            if row != 2:
+                continue
+
+            code, name = extract_code(text)
+            band = self._resolve_band(col, band_starts)
+            state = states.get(band)
+
+            node, _ = self._upsert(
+                f"{sheet_name}:R{row}C{col}", code, name, root,
+            )
+
+            if state:
+                state.category = node
+                state.subcategory = None
+                state.group = None
+                state.group_variant.clear()
+                state.unit = ""
+
+            if verbose:
+                self.stdout.write(f"    [R2 C{col:2d}] CAT: {name[:50]}")
+
+    # ------------------------------------------------------------------
+    # DB
+    # ------------------------------------------------------------------
+
+    def _upsert(self, source_key, code, name, parent, unit=""):
+        return WorkNode.objects.update_or_create(
             source_key=source_key,
             defaults={
                 "code": code,
@@ -469,44 +394,59 @@ class Command(BaseCommand):
                 "is_active": True,
             },
         )
-        return node, created
 
-    def normalize_text(self, value):
-        text = value.replace("\r", " ").replace("\n", " ").replace("\xa0", " ")
-        text = re.sub(r"\s+", " ", text).strip()
-        text = re.sub(r"^[\s\.\-–—:]+", "", text)
-        return text.strip()
+    def _sheet_code(self, title):
+        m = CODE_PATTERN.match(title)
+        if m:
+            return normalize_code(m.group(1))
+        return title[:10]
 
-    def detect_unit_cell(self, text):
-        """Detect if a cell text is a unit of measurement.
+    # ------------------------------------------------------------------
+    # Post-processing
+    # ------------------------------------------------------------------
 
-        Returns the unit string if detected, None otherwise.
-        Only detects REAL units (шт, метр, тонна, м2, etc.).
-        Categories like "1-жильный" are NOT units — they are navigation nodes.
+    def rebuild_tree_by_codes(self):
+        """Re-parent nodes by longest matching code prefix.
+
+        If B.code starts with A.code + "-", A is parent of B.
         """
-        if not text or len(text) > 20:
-            return None
-        if CODE_PATTERN.search(text):
-            return None
-        if GROUP_PATTERN.match(text):
-            return None
-        if UNIT_KEYWORDS.match(text):
-            return text
-        return None
+        nodes = list(
+            WorkNode.objects.filter(is_active=True)
+            .exclude(code="")
+            .order_by("code")
+            .values_list("id", "code", "parent_id")
+        )
 
-    def extract_cell_name(self, value):
-        if not isinstance(value, str):
-            return ""
-        return self.normalize_text(value)
+        code_map = {}
+        for nid, code, pid in nodes:
+            code_map[code.replace(" ", "")] = (nid, pid)
 
-    def normalize_code(self, code):
-        return code.translate(CODE_TRANSLATION).upper()
+        moved = 0
+        for nid, code, cur_pid in nodes:
+            norm = code.replace(" ", "")
+            best_parent = None
+            best_len = 0
 
-    def extract_code_and_name(self, value):
-        match = CODE_PATTERN.search(value)
-        if not match:
-            return None
+            for ccode, (cid, _) in code_map.items():
+                if cid == nid:
+                    continue
+                if norm.startswith(ccode + "-") and len(ccode) > best_len:
+                    best_parent = cid
+                    best_len = len(ccode)
 
-        code = self.normalize_code(match.group(1))
-        name = self.normalize_text(value[match.end():])
-        return code, name or code
+            if best_parent and best_parent != cur_pid:
+                WorkNode.objects.filter(id=nid).update(parent_id=best_parent)
+                moved += 1
+
+        return moved
+
+    def clear_units_from_parents(self):
+        """Remove units from nodes that have active children."""
+        parent_ids = WorkNode.objects.filter(
+            is_active=True,
+            children__is_active=True,
+        ).values_list("id", flat=True).distinct()
+
+        return WorkNode.objects.filter(
+            id__in=list(parent_ids),
+        ).exclude(unit="").update(unit="")
