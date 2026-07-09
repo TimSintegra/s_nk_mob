@@ -188,11 +188,6 @@ class Command(BaseCommand):
                 total_c += c
                 total_u += u
 
-            # Post-processing: rebuild tree by code prefix matching
-            moved = self.rebuild_tree_by_codes()
-            if moved:
-                self.stdout.write(f"\nRebuilt {moved} parent links by code prefix")
-
             # Post-processing: clear units from parent nodes
             cleared = self.clear_units_from_parents()
             if cleared:
@@ -265,6 +260,16 @@ class Command(BaseCommand):
                     if depth >= 3 and state:
                         unit = state.unit
 
+                    # For d1/d2: capture parent BEFORE updating state,
+                    # so siblings use the correct parent (subcategory/category)
+                    if state:
+                        if depth == 1:
+                            # New d1 is a sibling of the previous d1
+                            parent = state.subcategory or state.category or root_node
+                        elif depth == 2:
+                            # New d2 is a sibling of the previous d2
+                            parent = state.group or state.subcategory or state.category or root_node
+
                     node, was_new = self._upsert(
                         f"{sheet.title}:R{row_num}C{col}",
                         code, name, parent, unit,
@@ -280,8 +285,9 @@ class Command(BaseCommand):
                             state.group_variant.clear()
                             state.unit = ""
                         elif depth == 2:
+                            # New d2 replaces old d2 as the active group
                             state.group = node
-                            state.group_variant.pop(node, None)
+                            state.group_variant.clear()
 
                     if verbose:
                         self.stdout.write(
