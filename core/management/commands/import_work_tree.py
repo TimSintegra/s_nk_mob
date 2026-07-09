@@ -12,12 +12,13 @@ from core.models import WorkNode
 CODE_PATTERN = re.compile(r"([A-ZА-ЯЁ]{2}(?:\d{2}|/[A-Z]{2})(?:-\d+)*)", re.IGNORECASE)
 GROUP_PATTERN = re.compile(r"^\s*\d+\.\s")
 
+# Only REAL units of measurement — NOT categories like "1-жильный"
 UNIT_KEYWORDS = re.compile(
     r"^(?:шт|метры?|метр|тонны?|тонна|тонн|м[23]|кг|"
     r"килограмм[ыа]?|"
     r"100м(?:2)?|10м[23]|"
     r"модуль|комплект|"
-    r"[\d]+[\-]*[\d]*[\-]*жильн\w+|[\d]+[\-][\d]+ жил\w*)$",
+    r"т\*км)$",
     re.IGNORECASE,
 )
 
@@ -121,12 +122,34 @@ class Command(BaseCommand):
                 updated_count += s_updated
                 imported_keys.update(s_keys)
 
+            # Post-processing: clear units from parent nodes
+            cleared = self.clear_units_from_parents()
+            if cleared:
+                self.stdout.write(f"  Очищены единицы с {cleared} родительских узлов")
+
         self.stdout.write(self.style.SUCCESS("Импорт завершён."))
         self.stdout.write(f"Создано: {created_count}")
         self.stdout.write(f"Обновлено: {updated_count}")
         self.stdout.write(f"Уникальных узлов: {len(imported_keys)}")
         if options["clear"]:
             self.stdout.write(f"Скрыто устаревших узлов: {deactivated_count}")
+
+    def clear_units_from_parents(self):
+        """Remove units from all nodes that have active children.
+
+        Only leaf nodes (works without children) should have units.
+        Parent/navigation nodes should NOT have units.
+        """
+        parent_ids = WorkNode.objects.filter(
+            is_active=True,
+            children__is_active=True,
+        ).values_list("id", flat=True).distinct()
+
+        count = WorkNode.objects.filter(
+            id__in=list(parent_ids),
+        ).exclude(unit="").update(unit="")
+
+        return count
 
     def detect_section(self, sheet):
         """Автоопределение структуры раздела из листа Excel.
@@ -233,7 +256,7 @@ class Command(BaseCommand):
                 source_key = f"{section.root_code}:{cell.coordinate}"
                 imported_keys.add(source_key)
 
-                # Detect unit cells (short text without code pattern)
+                # Detect unit cells — only REAL units (шт, метр, тонна...)
                 unit = self.detect_unit_cell(text)
                 if unit:
                     current_unit[band_start] = unit
@@ -267,6 +290,7 @@ class Command(BaseCommand):
                     updated_count += int(not created)
                     continue
 
+                # Text without code (categories like "1-жильный", "металлический", etc.)
                 parent = state.group or state.green or state.blue or root_node
                 node, created = self.upsert_node(
                     source_key=source_key,
@@ -414,9 +438,8 @@ class Command(BaseCommand):
         """Detect if a cell text is a unit of measurement.
 
         Returns the unit string if detected, None otherwise.
-        Unit cells are short texts without code patterns that match known
-        unit keywords (шт, метр, тонна, м2, etc.) or serve as sub-type
-        descriptors (1-жильный, 3-5 жил, etc.).
+        Only detects REAL units (шт, метр, тонна, м2, etc.).
+        Categories like "1-жильный" are NOT units — they are navigation nodes.
         """
         if not text or len(text) > 20:
             return None

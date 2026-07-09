@@ -34,7 +34,7 @@ class Command(BaseCommand):
         results = []
 
         with transaction.atomic():
-            for row in ws.iter_rows(min_row=2, values_only=True):  # skip header
+            for row in ws.iter_rows(min_row=1, values_only=True):
                 full_name = str(row[0]).strip() if row[0] else ""
                 if not full_name:
                     continue
