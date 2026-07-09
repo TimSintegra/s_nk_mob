@@ -28,6 +28,12 @@ services:
     networks:
       - default
       - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.s-nk-mob.rule=Host(`mob.s-nk.su`)"
+      - "traefik.http.routers.s-nk-mob.entrypoints=websecure"
+      - "traefik.http.routers.s-nk-mob.tls.certresolver=letsencrypt"
+      - "traefik.http.services.s-nk-mob.loadbalancer.server.port=8000"
 
 networks:
   traefik:
