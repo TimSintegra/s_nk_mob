@@ -28,7 +28,7 @@
 {% endif %}
 
 {% for node in nodes %}
-    {% if node.has_active_children %}
+    {% if node.has_children %}
         <a href="{% url 'work_node_children' node.id %}" class="app-card mb-3">
             {% if node.code %}
                 <h5>{{ node.code }}</h5>

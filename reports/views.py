@@ -3,7 +3,7 @@ from datetime import date
 from decimal import Decimal
 
 from django.contrib import messages
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from openpyxl import Workbook
@@ -94,11 +94,19 @@ def dashboard(request):
 def work_node_list(request, parent_id=None):
     parent = None
 
+    active_children = WorkNode.objects.filter(
+        parent=OuterRef("pk"), is_active=True
+    )
+
     if parent_id:
         parent = get_object_or_404(WorkNode, id=parent_id, is_active=True)
-        nodes = parent.children.filter(is_active=True)
+        nodes = parent.children.filter(is_active=True).annotate(
+            has_children=Exists(active_children)
+        )
     else:
-        nodes = WorkNode.objects.filter(parent__isnull=True, is_active=True)
+        nodes = WorkNode.objects.filter(
+            parent__isnull=True, is_active=True
+        ).annotate(has_children=Exists(active_children))
 
     return render(
         request,
