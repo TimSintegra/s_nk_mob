@@ -25,6 +25,14 @@ services:
       POSTGRES_PORT: "5432"
     depends_on:
       - db
+    networks:
+      - default
+      - traefik
+
+networks:
+  traefik:
+    external: true
+    name: docker_proxy-server-net
 
 volumes:
   worker_reports_postgres_data:
