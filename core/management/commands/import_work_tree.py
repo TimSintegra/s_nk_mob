@@ -12,6 +12,15 @@ from core.models import WorkNode
 CODE_PATTERN = re.compile(r"([A-ZА-ЯЁ]{2}(?:\d{2}|/[A-Z]{2})(?:-\d+)*)", re.IGNORECASE)
 GROUP_PATTERN = re.compile(r"^\s*\d+\.\s")
 
+UNIT_KEYWORDS = re.compile(
+    r"^(?:шт|метры?|метр|тонны?|тонна|тонн|м[23]|кг|"
+    r"килограмм[ыа]?|"
+    r"100м(?:2)?|10м[23]|"
+    r"модуль|комплект|"
+    r"[\d]+[\-]*[\d]*[\-]*жильн\w+|[\d]+[\-][\d]+ жил\w*)$",
+    re.IGNORECASE,
+)
+
 CODE_TRANSLATION = str.maketrans(
     {
         "А": "A",
@@ -172,6 +181,8 @@ class Command(BaseCommand):
 
     def import_section(self, sheet, section):
         band_states = self.build_band_states(section)
+        # Track current unit per green band (green_start -> unit string)
+        current_unit = {gs: "" for gs in section.green_starts}
         created_count = 0
         updated_count = 0
         imported_keys = set()
@@ -197,9 +208,12 @@ class Command(BaseCommand):
         created_count += blue_created
         updated_count += blue_updated
 
-        green_created, green_updated = self.assign_green_nodes(root_node, section, band_states, imported_keys, sheet)
+        green_created, green_updated, green_units = self.assign_green_nodes(root_node, section, band_states, imported_keys, sheet)
         created_count += green_created
         updated_count += green_updated
+
+        # Merge units detected in the green row into current_unit
+        current_unit.update(green_units)
 
         for row_index in range(section.green_row + 1, section.end_row + 1):
             row = sheet[row_index]
@@ -219,6 +233,13 @@ class Command(BaseCommand):
                 source_key = f"{section.root_code}:{cell.coordinate}"
                 imported_keys.add(source_key)
 
+                # Detect unit cells (short text without code pattern)
+                unit = self.detect_unit_cell(text)
+                if unit:
+                    current_unit[band_start] = unit
+                    # Unit cell — don't create a WorkNode, just update the band's current unit
+                    continue
+
                 extracted = self.extract_code_and_name(text)
                 if extracted:
                     code, name = extracted
@@ -229,6 +250,7 @@ class Command(BaseCommand):
                             code=code,
                             name=name,
                             parent=parent,
+                            unit=current_unit.get(band_start, ""),
                         )
                         state.group = node
                         state.label = None
@@ -239,6 +261,7 @@ class Command(BaseCommand):
                             code=code,
                             name=name,
                             parent=parent,
+                            unit=current_unit.get(band_start, ""),
                         )
                     created_count += int(created)
                     updated_count += int(not created)
@@ -250,6 +273,7 @@ class Command(BaseCommand):
                     code="",
                     name=text,
                     parent=parent,
+                    unit=current_unit.get(band_start, ""),
                 )
                 state.label = node
                 created_count += int(created)
@@ -301,6 +325,7 @@ class Command(BaseCommand):
     def assign_green_nodes(self, root_node, section, band_states, imported_keys, sheet):
         created_count = 0
         updated_count = 0
+        green_units = {}  # green_start -> unit, for units found in the green row
 
         for cell in sheet[section.green_row]:
             if not isinstance(cell.value, str):
@@ -323,6 +348,12 @@ class Command(BaseCommand):
             code = extracted[0] if extracted else ""
             name = extracted[1] if extracted else text
 
+            # Green row cells might also contain units (e.g. II00 BI3='тонна')
+            unit = self.detect_unit_cell(text) if not code else None
+            if unit:
+                green_units[green_start] = unit
+                continue
+
             node, created = self.upsert_node(
                 source_key=source_key,
                 code=code,
@@ -337,7 +368,7 @@ class Command(BaseCommand):
             created_count += int(created)
             updated_count += int(not created)
 
-        return created_count, updated_count
+        return created_count, updated_count, green_units
 
     def build_band_states(self, section):
         return {start: BandState() for start in section.green_starts}
@@ -360,14 +391,14 @@ class Command(BaseCommand):
                 break
         return active_start
 
-    def upsert_node(self, source_key, code, name, parent):
+    def upsert_node(self, source_key, code, name, parent, unit=""):
         node, created = WorkNode.objects.update_or_create(
             source_key=source_key,
             defaults={
                 "code": code,
                 "name": name,
                 "parent": parent,
-                "unit": "",
+                "unit": unit,
                 "is_active": True,
             },
         )
@@ -378,6 +409,24 @@ class Command(BaseCommand):
         text = re.sub(r"\s+", " ", text).strip()
         text = re.sub(r"^[\s\.\-–—:]+", "", text)
         return text.strip()
+
+    def detect_unit_cell(self, text):
+        """Detect if a cell text is a unit of measurement.
+
+        Returns the unit string if detected, None otherwise.
+        Unit cells are short texts without code patterns that match known
+        unit keywords (шт, метр, тонна, м2, etc.) or serve as sub-type
+        descriptors (1-жильный, 3-5 жил, etc.).
+        """
+        if not text or len(text) > 20:
+            return None
+        if CODE_PATTERN.search(text):
+            return None
+        if GROUP_PATTERN.match(text):
+            return None
+        if UNIT_KEYWORDS.match(text):
+            return text
+        return None
 
     def extract_cell_name(self, value):
         if not isinstance(value, str):
