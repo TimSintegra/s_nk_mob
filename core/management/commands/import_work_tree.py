@@ -122,6 +122,11 @@ class Command(BaseCommand):
                 updated_count += s_updated
                 imported_keys.update(s_keys)
 
+            # Post-processing: rebuild tree structure by code prefixes
+            moved = self.rebuild_tree_by_codes()
+            if moved:
+                self.stdout.write(f"  Перестроено связей по кодам: {moved}")
+
             # Post-processing: clear units from parent nodes
             cleared = self.clear_units_from_parents()
             if cleared:
@@ -150,6 +155,44 @@ class Command(BaseCommand):
         ).exclude(unit="").update(unit="")
 
         return count
+
+    def rebuild_tree_by_codes(self):
+        """Re-parent nodes based on code prefix matching.
+
+        Rule: if node B's code starts with node A's code + "-",
+        then A is the parent of B.
+        Example: DW00-10-01-01 is parent of DW00-10-01-01-03
+        """
+        nodes = list(
+            WorkNode.objects.filter(is_active=True)
+            .exclude(code="")
+            .order_by("code")
+            .values_list("id", "code", "parent_id")
+        )
+
+        code_to_node = {}
+        for node_id, code, parent_id in nodes:
+            normalized = code.replace(" ", "")
+            code_to_node[normalized] = (node_id, parent_id)
+
+        moved = 0
+        for node_id, code, current_parent_id in nodes:
+            normalized = code.replace(" ", "")
+            best_parent = None
+            best_len = 0
+
+            for candidate_code, (candidate_id, _) in code_to_node.items():
+                if candidate_id == node_id:
+                    continue
+                if normalized.startswith(candidate_code + "-") and len(candidate_code) > best_len:
+                    best_parent = candidate_id
+                    best_len = len(candidate_code)
+
+            if best_parent and best_parent != current_parent_id:
+                WorkNode.objects.filter(id=node_id).update(parent_id=best_parent)
+                moved += 1
+
+        return moved
 
     def detect_section(self, sheet):
         """Автоопределение структуры раздела из листа Excel.
