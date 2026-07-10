@@ -1,13 +1,22 @@
 """
 Import work tree from structured Excel workbook "Структура ЕР.xlsx".
 
-Uses the HIERARCHY NUMBERING system (1., 2.1, 2.1.1, etc.) to determine
-parent-child relationships. This is the single source of truth for the tree.
+Builds parent-child relationships using the numbering system:
+- Row 1: root (number 1.)
+- Row 2: categories (numbers like 2.1, 2.2) — children of root
+- Row 3: subcategories (numbers like 2.1.1, 2.1.2) — children of row 2 nodes
+- Row 4+: deeper nodes (numbers 1., 2., 3., ... or 4. EL00-09-05, etc.) — 
+  children of the nearest numbered node above with different number format
+- Elements: codes without number prefix (like CS00-01-01-13) — 
+  children of nearest grouping node in same column
+- Variants: text without code or number (like 1-жильный) — grouping nodes
+- Units: measurement keywords — attributes on elements, not tree nodes
 
-Each cell that starts with a number like "2.1.1 CS00-01 ..." is a node.
-The number prefix defines the parent: "2.1.1" → parent is "2.1".
-
-Units (метр, шт) are attributes on elements, not tree nodes.
+Parent determination for numbered nodes:
+  - Row 2 → always child of root
+  - Row 3+ → look in same column for last numbered node with DIFFERENT format
+    (single=N., double=N.N, triple=N.N.N...). Same format = sibling.
+    If no node in same column, look across the band.
 """
 
 import re
@@ -20,34 +29,27 @@ from openpyxl import load_workbook
 from core.models import WorkNode
 
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
+HIERARCHY_PREFIX = re.compile(r"^\s*(\d+(?:\.\d+)*)\s*[\.\s)]")
 
-# Matches hierarchy number prefix: "1.", "2.1", "2.1.1", "2.1.1.1.3", etc.
-HIERARCHY_PREFIX = re.compile(r"^\s*(\d+(?:\.\d+)*)\.\s*")
-
-# Matches codes like CS00-01, EL00-08-02-60, DW00-10-01-01-03
 CODE_PATTERN = re.compile(
     r"([A-ZА-ЯЁ]{2}[/A-ZА-ЯЁ]{0,3}(?:\d{2})?(?:-\d+)*)",
     re.IGNORECASE,
 )
 
-# Unit keywords — only REAL units of measurement
 UNIT_KEYWORDS = re.compile(
     r"^(?:шт(?:ук[аи]?)?|"
-    r"метры?|метр|"
+    r"метры?|метр(?:ов)?|"
     r"тонны?|тонна|тонн|"
-    r"м[234]|"
+    r"м[234]|м2|"
     r"кг|"
     r"килограмм[ыа]?|"
     r"100м(?:2)?|"
     r"10м[23]|"
     r"модуль|комплект|"
     r"т[\*\.]км|"
-    r"усл\.\s*метр|"
+    r"усл\.\s*метр(?:ов)?|"
     r"лоток|"
-    r"комплект)$",
+    r"комплект)",
     re.IGNORECASE,
 )
 
@@ -61,16 +63,11 @@ CODE_TRANSLATION = str.maketrans({
 })
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 def normalize_code(code: str) -> str:
     return code.translate(CODE_TRANSLATION).upper()
 
 
 def clean(text: str) -> str:
-    """Normalize whitespace, strip leading punctuation."""
     if not text:
         return ""
     t = str(text).replace("\r", " ").replace("\n", " ").replace("\xa0", " ")
@@ -80,12 +77,6 @@ def clean(text: str) -> str:
 
 
 def extract_number_and_rest(text: str) -> tuple[str, str]:
-    """Extract hierarchy number prefix and the rest of the text.
-
-    "2.1.1 CS00-01 Монтаж лотков" → ("2.1.1", "CS00-01 Монтаж лотков")
-    "2.1 Монтаж лотков" → ("2.1", "Монтаж лотков")
-    "метр" → ("", "метр")
-    """
     m = HIERARCHY_PREFIX.match(text)
     if m:
         number = m.group(1)
@@ -95,30 +86,50 @@ def extract_number_and_rest(text: str) -> tuple[str, str]:
 
 
 def extract_code(text: str) -> tuple[str, str]:
-    """Extract code and remaining name from text.
-
-    "CS00-01 Монтаж лотков" → ("CS00-01", "Монтаж лотков")
-    "Монтаж лотков" → ("", "Монтаж лотков")
-    """
     m = CODE_PATTERN.search(text)
     if not m:
         return "", text.strip()
     code = normalize_code(m.group(1))
+    # Real codes contain at least 2 consecutive digits (e.g. CS00, EL00-08-02-60)
+    if not re.search(r"\d{2,}", code):
+        return "", text.strip()
     name = text[m.end():].strip()
     return code, name or code
 
 
+def number_format(number: str) -> str:
+    dots = number.count(".")
+    if dots == 0:
+        return "single"
+    elif dots == 1:
+        return "double"
+    else:
+        return "triple"
+
+
 def is_unit(text: str) -> bool:
-    if not text or len(text) > 30:
+    if not text or len(text) > 60:
         return False
     if CODE_PATTERN.search(text):
         return False
-    return bool(UNIT_KEYWORDS.match(text.strip()))
+    t = text.strip().split("(")[0].split(" (")[0].strip()
+    return bool(UNIT_KEYWORDS.match(t))
 
 
-# ---------------------------------------------------------------------------
-# Command
-# ---------------------------------------------------------------------------
+def is_variant(text: str) -> bool:
+    t = text.strip()
+    if not t or len(t) > 60:
+        return False
+    if CODE_PATTERN.search(t):
+        return False
+    if HIERARCHY_PREFIX.match(t):
+        return False
+    if is_unit(t):
+        return False
+    if re.search(r"\d.*жил", t, re.IGNORECASE):
+        return True
+    return False
+
 
 class Command(BaseCommand):
     help = "Import work tree from structured Excel workbook"
@@ -151,12 +162,10 @@ class Command(BaseCommand):
             for sheet in workbook.worksheets:
                 self.stdout.write(f"\n{'=' * 60}")
                 self.stdout.write(f"Sheet: {sheet.title}")
-
                 c, u = self.import_sheet(sheet, verbose)
                 total_c += c
                 total_u += u
 
-            # Post-processing: clear units from parent nodes
             cleared = self.clear_units_from_parents()
             if cleared:
                 self.stdout.write(f"Cleared units from {cleared} parent nodes")
@@ -165,20 +174,14 @@ class Command(BaseCommand):
             self.style.SUCCESS(f"\nDone. Created: {total_c}, Updated: {total_u}")
         )
 
-    # ------------------------------------------------------------------
-    # Sheet import
-    # ------------------------------------------------------------------
-
     def import_sheet(self, sheet, verbose=False):
         grid = self._read_grid(sheet)
 
-        # Root from A1
         root_text = grid.get((1, 1), "")
         if not root_text:
             self.stdout.write(self.style.WARNING("  Skipped: no A1"))
             return 0, 0
 
-        # Parse root: may have number "1." or just code
         root_number, root_rest = extract_number_and_rest(root_text)
         root_code, root_name = extract_code(root_rest)
         if not root_code:
@@ -189,125 +192,172 @@ class Command(BaseCommand):
         root_node, _ = self._upsert(
             f"{sheet.title}:A1", root_code, root_name, None,
         )
-        # Map: "1" → root_node (strip the trailing dot from "1.")
-        number_map = {}
-        if root_number:
-            number_map[root_number] = root_node
-
         self.stdout.write(f"  Root: {root_code} | {root_name[:50]}")
 
-        # Band starts from row 2 (for unit tracking)
-        band_starts = self._band_starts_from_row2(grid)
-        band_units = {s: "" for s in band_starts}  # current unit per band
+        band_starts = sorted({col for (r, col), _ in grid.items() if r == 2})
+        if not band_starts:
+            band_starts = [1]
+
+        bands = {}
+        for bs in band_starts:
+            bands[bs] = {
+                "unit": "",
+                "all_nodes": [],
+                "col_nodes": {},
+                "col_last_grouping": {},
+                "col_had_elements": {},
+            }
 
         created = updated = 0
         max_row = max((r for r, _ in grid), default=1)
 
         for row_num in range(2, max_row + 1):
-            for col in sorted(c for r, c in grid if r == row_num):
+            cols_in_row = sorted(c for r, c in grid if r == row_num)
+            for col in cols_in_row:
                 text = grid[(row_num, col)]
                 if not text:
                     continue
 
-                # Skip root (already handled)
-                if row_num == 1 and col == 1:
-                    continue
-
                 band = self._resolve_band(col, band_starts)
+                bd = bands[band]
 
-                # Unit cell → update band unit, skip
+                if col not in bd["col_nodes"]:
+                    bd["col_nodes"][col] = []
+                if col not in bd["col_last_grouping"]:
+                    bd["col_last_grouping"][col] = root_node
+                if col not in bd["col_had_elements"]:
+                    bd["col_had_elements"][col] = False
+
                 if is_unit(text):
-                    if band is not None:
-                        band_units[band] = text.strip()
+                    bd["unit"] = text.strip()
                     if verbose:
                         self.stdout.write(
                             f"    [R{row_num}C{col:2d}] UNIT: {text[:30]}"
                         )
                     continue
 
-                # Parse number prefix and content
                 number, rest = extract_number_and_rest(text)
 
                 if number:
-                    # Numbered cell → tree node
-                    # Find parent by looking up prefix (everything before last dot)
-                    parent = self._find_parent(number, number_map, root_node)
+                    fmt = number_format(number)
 
-                    # Extract code and name from the rest
+                    if row_num == 2:
+                        parent = root_node
+                    else:
+                        parent = self._find_parent_for_numbered(
+                            number, fmt, col, bd, root_node, row_num
+                        )
+
+                    bd["col_had_elements"][col] = False
+
                     code, name = extract_code(rest)
                     if not code:
                         code = ""
                     if not name:
                         name = rest
 
-                    # Determine unit: only for leaf nodes (cells deeper than
-                    # their children). We apply unit for all numbered cells
-                    # and clear_units_from_parents() will clean up later.
-                    unit = band_units.get(band, "") if band is not None else ""
-
                     node, was_new = self._upsert(
                         f"{sheet.title}:R{row_num}C{col}",
-                        code, name, parent, unit,
+                        code, name, parent, bd["unit"],
                     )
                     created += int(was_new)
                     updated += int(not was_new)
 
-                    # Register in number map
-                    number_map[number] = node
+                    bd["all_nodes"].append((row_num, col, fmt, node))
+                    bd["col_nodes"][col].append((row_num, fmt, node))
+                    bd["col_last_grouping"][col] = node
 
-                    depth = number.count(".")
+                    if verbose:
+                        prefix = "  " * len(bd["all_nodes"])
+                        self.stdout.write(
+                            f"    [R{row_num}C{col:2d}] {number:15s} {prefix}"
+                            f"{code or '—':20s} {name[:30]}"
+                            + (f" [{bd['unit']}]" if bd["unit"] else "")
+                        )
+
+                elif is_variant(text):
+                    parent = self._find_parent_for_variant(col, bd, root_node)
+                    node, was_new = self._upsert(
+                        f"{sheet.title}:R{row_num}C{col}",
+                        "", text, parent, "",
+                    )
+                    created += int(was_new)
+                    updated += int(not was_new)
+                    bd["col_last_grouping"][col] = node
+                    bd["col_had_elements"][col] = False
+
                     if verbose:
                         self.stdout.write(
-                            f"    [R{row_num}C{col:2d}] {number:15s} "
-                            f"{'  ' * depth}{code or '—':20s} {name[:30]}"
-                            + (f" [{unit}]" if unit else "")
+                            f"    [R{row_num}C{col:2d}] VARIANT: {text[:40]}"
                         )
+
                 else:
-                    # No number → could be a codeless label or unnumbered cell
-                    # These are rare; create as child of last numbered node
-                    # in this band, or skip
-                    if verbose:
-                        self.stdout.write(
-                            f"    [R{row_num}C{col:2d}] SKIP (no number): "
-                            f"{text[:40]}"
+                    code, name = extract_code(text)
+                    if code:
+                        parent = bd["col_last_grouping"].get(col, root_node)
+                        node, was_new = self._upsert(
+                            f"{sheet.title}:R{row_num}C{col}",
+                            code, name or text, parent, bd["unit"],
                         )
+                        created += int(was_new)
+                        updated += int(not was_new)
+
+                        bd["col_had_elements"][col] = True
+
+                        if verbose:
+                            self.stdout.write(
+                                f"    [R{row_num}C{col:2d}] ELEMENT: "
+                                f"{code:20s} {name[:30]}"
+                                + (f" [{bd['unit']}]" if bd["unit"] else "")
+                            )
+                    else:
+                        if verbose:
+                            self.stdout.write(
+                                f"    [R{row_num}C{col:2d}] SKIP: {text[:40]}"
+                            )
 
         self.stdout.write(f"  Created: {created}, Updated: {updated}")
         return created, updated
 
-    # ------------------------------------------------------------------
-    # Parent finding
-    # ------------------------------------------------------------------
+    def _find_parent_for_numbered(self, number, fmt, col, bd, root_node, row_num):
+        col_nodes = bd["col_nodes"].get(col, [])
 
-    def _find_parent(self, number: str, number_map: dict, root_node) -> WorkNode:
-        """Find the parent node for a given hierarchy number.
+        if col_nodes:
+            last_r, last_fmt, last_node = col_nodes[-1]
 
-        "2.1.1" → parent prefix is "2.1"
-        "2.1" → parent prefix is "2"
-        "2" → parent is root
-        """
-        parts = number.split(".")
-        if len(parts) <= 1:
-            # Direct child of root: "2" → parent is root
-            return root_node
+            if last_fmt != fmt:
+                # Different format → parent is the last node in this column
+                return last_node
 
-        # Parent prefix = all parts except the last one
-        parent_prefix = ".".join(parts[:-1])
+            # Same format → check had_elements
+            had_elems = bd["col_had_elements"].get(col, False)
+            if not had_elems:
+                # No elements since last grouping → child of last node
+                return last_node
+            else:
+                # Elements since last grouping → sibling
+                # Find the sibling's parent (previous node with different format in same column)
+                for r, f, n in reversed(col_nodes[:-1]):
+                    if f != fmt:
+                        return n
+                return root_node
 
-        if parent_prefix in number_map:
-            return number_map[parent_prefix]
-
-        # Fallback: try shorter prefixes
-        for i in range(len(parts) - 1, 0, -1):
-            short_prefix = ".".join(parts[:i])
-            if short_prefix in number_map:
-                return number_map[short_prefix]
+        # First numbered node in this column – find nearest parent in band
+        for r, c, nfmt, n in reversed(bd["all_nodes"]):
+            if r >= row_num:
+                continue
+            if nfmt != fmt:
+                return n
 
         return root_node
 
-    # ------------------------------------------------------------------
-    # Grid
-    # ------------------------------------------------------------------
+    def _find_parent_for_variant(self, col, bd, root_node):
+        col_nodes = bd["col_nodes"].get(col, [])
+        if col_nodes:
+            return col_nodes[-1][2]
+        if bd["all_nodes"]:
+            return bd["all_nodes"][-1][3]
+        return root_node
 
     def _read_grid(self, sheet):
         grid = {}
@@ -319,13 +369,6 @@ class Command(BaseCommand):
                         grid[(cell.row, cell.column)] = val
         return grid
 
-    # ------------------------------------------------------------------
-    # Bands (for unit tracking only)
-    # ------------------------------------------------------------------
-
-    def _band_starts_from_row2(self, grid):
-        return sorted({col for (r, col), _ in grid.items() if r == 2})
-
     def _resolve_band(self, col, band_starts):
         best = None
         for s in band_starts:
@@ -334,10 +377,6 @@ class Command(BaseCommand):
             else:
                 break
         return best
-
-    # ------------------------------------------------------------------
-    # DB
-    # ------------------------------------------------------------------
 
     def _upsert(self, source_key, code, name, parent, unit=""):
         return WorkNode.objects.update_or_create(
@@ -357,17 +396,11 @@ class Command(BaseCommand):
             return normalize_code(m.group(1))
         return title[:10]
 
-    # ------------------------------------------------------------------
-    # Post-processing
-    # ------------------------------------------------------------------
-
     def clear_units_from_parents(self):
-        """Remove units from nodes that have active children."""
         parent_ids = WorkNode.objects.filter(
             is_active=True,
             children__is_active=True,
         ).values_list("id", flat=True).distinct()
-
         return WorkNode.objects.filter(
             id__in=list(parent_ids),
         ).exclude(unit="").update(unit="")
