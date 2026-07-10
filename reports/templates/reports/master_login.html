@@ -1,23 +1,35 @@
 {% extends "base.html" %}
+{% load static %}
 
 {% block title %}Вход мастера{% endblock %}
 
-{% block content %}
-<h3 class="mb-4">Вход мастера</h3>
+{% block header %}{% endblock %}
 
-<form method="post">
-    {% csrf_token %}
+{% block main %}
+<div class="app-login-page">
+    <div class="app-login-card">
+        <div style="text-align: center; margin-bottom: 8px;">
+            <img src="{% static 'favicon.ico' %}" alt="" style="width: 48px; height: 48px; border-radius: 12px;">
+        </div>
+        <h3>СНК МОБ</h3>
+        <p style="text-align: center; color: var(--text-secondary); font-size: 13px; margin-bottom: 24px; margin-top: -16px;">
+            Учёт выполненных работ
+        </p>
 
-    <div class="mb-3">
-        <label class="form-label">Телефон</label>
-        <input type="text" name="phone" class="form-control app-input" placeholder="+7..." required>
+        <form method="post">
+            {% csrf_token %}
+            <div class="mb-3">
+                <label class="app-label">Телефон</label>
+                <input type="text" name="phone" class="form-control app-input" placeholder="+7..." required>
+            </div>
+
+            <div class="mb-4">
+                <label class="app-label">Пароль</label>
+                <input type="password" name="password" class="form-control app-input" required>
+            </div>
+
+            <button class="app-btn w-100">Войти</button>
+        </form>
     </div>
-
-    <div class="mb-3">
-        <label class="form-label">Пароль</label>
-        <input type="password" name="password" class="form-control app-input" required>
-    </div>
-
-    <button class="app-button w-100">Войти</button>
-</form>
+</div>
 {% endblock %}

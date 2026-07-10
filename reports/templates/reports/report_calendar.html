@@ -1,36 +1,35 @@
 {% extends "base.html" %}
 
 {% block content %}
-<a href="{% url 'dashboard' %}" class="text-decoration-none mb-3 d-inline-block">‹ Назад</a>
-
-<h4 class="mb-3">Отчёты</h4>
+<a href="{% url 'dashboard' %}" class="app-back mb-3 d-inline-block">‹ Назад</a>
+<h4 class="app-title">Отчёты</h4>
 
 <form method="get" class="mb-4">
-    <label class="form-label">Выберите дату</label>
+    <label class="app-label">Выберите дату</label>
     <div class="d-flex gap-2">
         <input type="date" name="date" value="{{ selected_date }}" class="form-control app-input">
-        <button class="app-button">Показать</button>
+        <button class="app-btn app-btn-sm" style="white-space: nowrap;">Показать</button>
     </div>
 </form>
 
 {% for report in reports %}
-<div class="card mb-3">
-    <div class="card-body">
-        <h5>{{ report.date }} — {{ report.get_status_display }}</h5>
+<div class="app-report-card">
+    <h5>{{ report.date }} — {{ report.get_status_display }}</h5>
 
-        {% for work in report.work_items.all %}
-            <p class="mb-1"><strong>Объект:</strong> {{ work.site_name }}</p>
-            <p class="mb-1">{{ work.work_node.code }} — {{ work.work_node.name }}</p>
-            <p class="mb-2">{{ work.quantity }} {{ work.work_node.unit }}</p>
-            <hr>
-        {% endfor %}
+    {% for work in report.work_items.all %}
+        <p class="mb-1" style="font-size: 13px; color: var(--text);"><strong>Объект:</strong> {{ work.site_name }}</p>
+        <p class="mb-1" style="font-size: 13px; color: var(--text-secondary);">{{ work.work_node.code }} — {{ work.work_node.name }}</p>
+        <p class="mb-2" style="font-size: 13px; color: var(--text-secondary);">{{ work.quantity }} {{ work.work_node.unit }}</p>
+        <hr class="app-divider">
+    {% endfor %}
 
-        <a href="{% url 'export_report_excel' report.id %}" class="app-button w-100 text-center">
-            Скачать Excel
-        </a>
-    </div>
+    <a href="{% url 'export_report_excel' report.id %}" class="app-btn w-100 text-center app-btn-sm">
+        Скачать Excel
+    </a>
 </div>
 {% empty %}
-<p>За эту дату отчётов нет.</p>
+<div class="app-empty">
+    <p>За эту дату отчётов нет.</p>
+</div>
 {% endfor %}
 {% endblock %}

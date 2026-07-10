@@ -1,99 +1,71 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="d-flex gap-3 align-items-center mb-3">
-    <a href="{% url 'dashboard' %}" class="text-decoration-none">‹ Назад</a>
-    <h4 class="mb-0">Табель учета рабочего времени</h4>
+<div class="d-flex align-items-center gap-2 mb-3">
+    <a href="{% url 'dashboard' %}" class="app-back">‹ Назад</a>
+    <h4 class="app-title mb-0" style="font-size: 16px;">Табель рабочего времени</h4>
 </div>
 
 <form method="get" class="mb-3">
-    <input type="month" name="month" value="{{ selected_month }}" class="form-control app-input" onchange="this.form.submit()">
+    <input type="month" name="month" value="{{ selected_month }}" class="form-control app-input" onchange="this.form.submit()" style="max-width: 220px;">
 </form>
 
-<div class="table-responsive border rounded mb-4">
-    <table class="table table-sm align-middle mb-0 timesheet-table">
-        <thead>
-            <tr>
-                <th class="timesheet-name">ФИО</th>
-                {% for day in days %}
-                    <th class="text-center">{{ day }}</th>
-                {% endfor %}
-            </tr>
-        </thead>
-        <tbody>
-            {% for row in rows %}
-                <tr>
-                    <th class="timesheet-name" title="{{ row.name }}">{{ row.short_name }}</th>
-                    {% for cell in row.cells %}
-                        <td class="text-center">{{ cell|default:"" }}</td>
-                    {% endfor %}
-                </tr>
-            {% empty %}
-                <tr>
-                    <td colspan="{{ days|length|add:'1' }}" class="text-center py-4">
-                        Нет рабочих для отображения
-                    </td>
-                </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-</div>
-
-{% if extra_rows %}
-    <h5 class="mb-3">Добавленные рабочие</h5>
-
-    <div class="table-responsive border rounded">
-        <table class="table table-sm align-middle mb-0 timesheet-table">
+<div class="app-timesheet-wrapper">
+    <div class="table-responsive" style="overflow-x: auto;">
+        <table class="table app-timesheet-table">
             <thead>
                 <tr>
-                    <th class="timesheet-name">ФИО</th>
+                    <th class="app-timesheet-name">ФИО</th>
                     {% for day in days %}
-                        <th class="text-center">{{ day }}</th>
+                        <th class="text-center" style="min-width: 28px; width: 28px; padding: 4px 2px;">{{ day }}</th>
                     {% endfor %}
                 </tr>
             </thead>
             <tbody>
-                {% for row in extra_rows %}
+                {% for row in rows %}
                     <tr>
-                        <th class="timesheet-name" title="{{ row.name }}">{{ row.short_name }}</th>
+                        <th class="app-timesheet-name" title="{{ row.name }}">{{ row.short_name }}</th>
                         {% for cell in row.cells %}
-                            <td class="text-center">{{ cell|default:"" }}</td>
+                            <td class="text-center" style="min-width: 28px; width: 28px; padding: 4px 2px; font-size: 12px;">{{ cell|default:"" }}</td>
                         {% endfor %}
+                    </tr>
+                {% empty %}
+                    <tr>
+                        <td colspan="{{ days|length|add:'1' }}" class="text-center py-4" style="color: var(--text-muted); font-size: 13px;">
+                            Нет рабочих для отображения
+                        </td>
                     </tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
+</div>
+
+{% if extra_rows %}
+    <h5 class="app-section-title">Добавленные рабочие</h5>
+    <div class="app-timesheet-wrapper">
+        <div class="table-responsive" style="overflow-x: auto;">
+            <table class="table app-timesheet-table">
+                <thead>
+                    <tr>
+                        <th class="app-timesheet-name">ФИО</th>
+                        {% for day in days %}
+                            <th class="text-center" style="min-width: 28px; width: 28px; padding: 4px 2px;">{{ day }}</th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in extra_rows %}
+                        <tr>
+                            <th class="app-timesheet-name" title="{{ row.name }}">{{ row.short_name }}</th>
+                            {% for cell in row.cells %}
+                                <td class="text-center" style="min-width: 28px; width: 28px; padding: 4px 2px; font-size: 12px;">{{ cell|default:"" }}</td>
+                            {% endfor %}
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
 {% endif %}
-
-<style>
-    .timesheet-table {
-        min-width: 820px;
-        color: #070084;
-    }
-
-    .timesheet-table th,
-    .timesheet-table td {
-        min-width: 34px;
-        height: 34px;
-        border-color: rgba(7, 0, 132, 0.22);
-        white-space: nowrap;
-    }
-
-    .timesheet-name {
-        position: sticky;
-        left: 0;
-        z-index: 1;
-        min-width: 150px;
-        max-width: 150px;
-        background: white;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    thead .timesheet-name {
-        z-index: 2;
-    }
-</style>
 {% endblock %}
