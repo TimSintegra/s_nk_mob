@@ -44,7 +44,7 @@ UNIT_KEYWORDS = re.compile(
     r"^(?:шт(?:ук[аи]?)?|"
     r"метры?|метр(?:ов)?|"
     r"тонны?|тонна|тонн|"
-    r"м[234]|м2|"
+    r"м\b|м[234]|"
     r"кг|"
     r"килограмм[ыа]?|"
     r"100м(?:2)?|"
@@ -121,7 +121,11 @@ def number_format(number: str) -> str:
 def is_unit(text: str) -> bool:
     if not text or len(text) > 60:
         return False
-    if CODE_PATTERN.search(text):
+    # Only skip if text contains a real code with digits (not pure Cyrillic like "метр")
+    m = CODE_PATTERN.search(text)
+    if m and re.search(r"\d{2,}", m.group(1)):
+        return False
+    if LATIN_CODE_PREFIX.match(text):
         return False
     t = text.strip().split("(")[0].split(" (")[0].strip()
     return bool(UNIT_KEYWORDS.match(t))
@@ -131,7 +135,11 @@ def is_variant(text: str) -> bool:
     t = text.strip()
     if not t or len(t) > 60:
         return False
-    if CODE_PATTERN.search(t):
+    # A real code must have 2+ digits (to not match pure Cyrillic words like "жильный")
+    m = CODE_PATTERN.search(t)
+    if m and re.search(r"\d{2,}", m.group(1)):
+        return False
+    if LATIN_CODE_PREFIX.match(t):
         return False
     if HIERARCHY_PREFIX.match(t):
         return False
@@ -240,7 +248,8 @@ class Command(BaseCommand):
                     bd["col_had_elements"][col] = False
 
                 if is_unit(text):
-                    bd["unit"] = text.strip()
+                    # Extract just the unit keyword, stripping parenthetical notes
+                    bd["unit"] = text.strip().split("(")[0].split(" (")[0].strip()
                     if verbose:
                         self.stdout.write(
                             f"    [R{row_num}C{col:2d}] UNIT: {text[:30]}"
