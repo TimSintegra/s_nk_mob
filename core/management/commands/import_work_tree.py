@@ -36,6 +36,10 @@ CODE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Fallback for code prefixes that start with Latin letters but don't have
+# the standard digit pattern (e.g. "EL/II Монтаж..." → code="EL/II")
+LATIN_CODE_PREFIX = re.compile(r"^([A-Z]{2,}[\d/][A-Z\d/-]*)\s")
+
 UNIT_KEYWORDS = re.compile(
     r"^(?:шт(?:ук[аи]?)?|"
     r"метры?|метр(?:ов)?|"
@@ -60,6 +64,7 @@ CODE_TRANSLATION = str.maketrans({
     "а": "A", "в": "B", "с": "C", "е": "E", "н": "H",
     "к": "K", "м": "M", "о": "O", "р": "P", "т": "T",
     "х": "X", "у": "Y", "і": "I", "ї": "I", "ё": "E",
+    "/": " ",
 })
 
 
@@ -87,14 +92,20 @@ def extract_number_and_rest(text: str) -> tuple[str, str]:
 
 def extract_code(text: str) -> tuple[str, str]:
     m = CODE_PATTERN.search(text)
-    if not m:
-        return "", text.strip()
-    code = normalize_code(m.group(1))
-    # Real codes contain at least 2 consecutive digits (e.g. CS00, EL00-08-02-60)
-    if not re.search(r"\d{2,}", code):
-        return "", text.strip()
-    name = text[m.end():].strip()
-    return code, name or code
+    if m:
+        code = normalize_code(m.group(1))
+        if re.search(r"\d{2,}", code):
+            name = text[m.end():].strip()
+            return code, name or code
+
+    # Fallback: text starts with a Latin code prefix (e.g. "EL/II Монтаж...")
+    m2 = LATIN_CODE_PREFIX.match(text)
+    if m2:
+        code = normalize_code(m2.group(1))
+        name = text[m2.end():].strip()
+        return code, name or code
+
+    return "", text.strip()
 
 
 def number_format(number: str) -> str:
@@ -392,9 +403,12 @@ class Command(BaseCommand):
 
     def _sheet_code(self, title):
         m = CODE_PATTERN.match(title)
-        if m:
+        if m and re.search(r"\d{2,}", m.group(1)):
             return normalize_code(m.group(1))
-        return title[:10]
+        m2 = LATIN_CODE_PREFIX.match(title)
+        if m2:
+            return normalize_code(m2.group(1))
+        return title.split()[0] if title.split() else title[:10]
 
     def clear_units_from_parents(self):
         parent_ids = WorkNode.objects.filter(
