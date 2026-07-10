@@ -29,7 +29,10 @@ from openpyxl import load_workbook
 from core.models import WorkNode
 
 
-HIERARCHY_PREFIX = re.compile(r"^\s*(\d+(?:\.\d+)*)\s*[\.\s)]")
+HIERARCHY_PREFIX = re.compile(
+    r"^\s*(\d+(?:\.\d+)*)"
+    r"(?:\s*\.\s*|\)\s*|\s+(?=[А-ЯA-Z]))"
+)
 
 CODE_PATTERN = re.compile(
     r"([A-ZА-ЯЁ]{2}[/A-ZА-ЯЁ]{0,3}(?:\d{2})?(?:-\d+)*)",
